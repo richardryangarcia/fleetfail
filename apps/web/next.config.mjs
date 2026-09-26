@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ['@fleetfail/engine'],
+  transpilePackages: ['@fleetfail/engine', 'leaflet.markercluster'],
   experimental: {
     serverComponentsExternalPackages: ['better-sqlite3'],
   },
