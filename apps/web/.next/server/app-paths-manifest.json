@@ -1,0 +1,4 @@
+{
+  "/api/state/route": "app/api/state/route.js",
+  "/api/ercot/route": "app/api/ercot/route.js"
+}
