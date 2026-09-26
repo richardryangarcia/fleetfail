@@ -1,7 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import type { FleetMetrics, Dispatch, ErcotCacheData } from '@fleetfail/engine';
 import Link from 'next/link';
+
+const MAP_DEFAULT_TARGET_KW = 1500;
 
 interface MapSideStripProps {
   metrics: FleetMetrics;
@@ -41,6 +44,8 @@ export function MapSideStrip({
   onMassOutage,
   onRestoreAll,
 }: MapSideStripProps) {
+  const [targetKw, setTargetKw] = useState(MAP_DEFAULT_TARGET_KW);
+  
   const progressPct = dispatch && dispatch.targetKw > 0
     ? (dispatch.deliveredKw / dispatch.targetKw) * 100
     : 0;
@@ -121,6 +126,19 @@ export function MapSideStrip({
           </span>
         </div>
         
+        {/* Target Power Input - matches ops page pattern */}
+        <div className="mb-3">
+          <label className="block text-[10px] text-nc-ink-dim mb-1">Target Power (kW)</label>
+          <input
+            type="number"
+            value={targetKw}
+            onChange={(e) => setTargetKw(Number(e.target.value))}
+            className="w-full bg-nc-bg border border-nc-line-strong text-nc-num font-mono text-xs px-2 py-1.5 outline-none focus:border-nc-accent-dim"
+            min={0}
+            max={5000}
+          />
+        </div>
+        
         {dispatch ? (
           <>
             <div className="flex items-baseline gap-3 mb-1">
@@ -152,12 +170,12 @@ export function MapSideStrip({
         )}
         
         <button
-          onClick={() => onStartDispatch(400)}
+          onClick={() => onStartDispatch(targetKw)}
           disabled={dispatch?.status === 'executing'}
           className="w-full mt-3 py-2 text-left px-3 border border-nc-accent-dim text-nc-accent bg-[#161208] hover:bg-[#1e180a] disabled:border-nc-line-strong disabled:text-nc-ink-dim disabled:bg-nc-elev text-[12px] font-medium transition-colors"
         >
           Start Dispatch
-          <span className="block text-[10px] font-mono text-nc-ink-mute mt-0.5">target=400kW</span>
+          <span className="block text-[10px] font-mono text-nc-ink-mute mt-0.5">target={targetKw}kW</span>
         </button>
       </div>
 
