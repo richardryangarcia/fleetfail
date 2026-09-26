@@ -34,6 +34,12 @@ export interface Device {
   processedKeys: Set<string>;
   /** Zone identifier for geographic allocation */
   zone: string;
+  /** Latitude for map display (synthetic, not real install location) */
+  latitude: number;
+  /** Longitude for map display (synthetic, not real install location) */
+  longitude: number;
+  /** Current setpoint in kW (for visual display during dispatch) */
+  currentSetpointKw: number;
 }
 
 export interface Command {

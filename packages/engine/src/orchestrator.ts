@@ -158,7 +158,7 @@ export class Orchestrator {
     if (fault.faultType === 'offline') {
       const device = this.state.devices.get(fault.deviceId);
       if (device) {
-        const updated = setDeviceStatus(device, 'offline', this.state.currentTime);
+        const updated = { ...setDeviceStatus(device, 'offline', this.state.currentTime), currentSetpointKw: 0 };
         this.state.devices.set(fault.deviceId, updated);
         this.emitEvent(events.deviceOffline(this.state.currentTime, fault.deviceId));
       }
@@ -430,6 +430,9 @@ export class Orchestrator {
     this.state.commands.set(commandId, updated);
     this.metrics.commandsAcked++;
     
+    const updatedDevice = { ...this.state.devices.get(command.deviceId)!, currentSetpointKw: command.setpointKw };
+    this.state.devices.set(command.deviceId, updatedDevice);
+    
     this.emitEvent(events.commandAcked(
       this.state.currentTime,
       command.dispatchId,
@@ -592,6 +595,13 @@ export class Orchestrator {
         dispatch.targetKw,
         dispatch.deliveredKw
       ));
+    }
+    
+    for (const device of this.state.devices.values()) {
+      if (device.currentSetpointKw > 0) {
+        const resetDevice = { ...device, currentSetpointKw: 0 };
+        this.state.devices.set(device.id, resetDevice);
+      }
     }
     
     return true;
