@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
 import type { Device, FleetEvent, ErcotCacheData, Dispatch } from '@fleetfail/engine';
 import L from 'leaflet';
+import 'leaflet.markercluster';
 import { useMap } from 'react-leaflet';
 
 const MapContainer = dynamic(
@@ -83,15 +84,12 @@ function ClusterLayer({
   useEffect(() => {
     if (!map || typeof window === 'undefined') return;
     
-    const loadMarkerCluster = async () => {
-      await import('leaflet.markercluster');
-      
-      if (clusterGroupRef.current) {
-        map.removeLayer(clusterGroupRef.current);
-        clusterGroupRef.current = null;
-      }
-      
-      const clusterGroup = L.markerClusterGroup({
+    if (clusterGroupRef.current) {
+      map.removeLayer(clusterGroupRef.current);
+      clusterGroupRef.current = null;
+    }
+    
+    const clusterGroup = L.markerClusterGroup({
         chunkedLoading: true,
         maxClusterRadius: 60,
         spiderfyOnMaxZoom: true,
@@ -173,13 +171,10 @@ function ClusterLayer({
         }
         
         clusterGroup.addLayer(marker);
-      });
-      
-      map.addLayer(clusterGroup);
-      clusterGroupRef.current = clusterGroup;
-    };
+    });
     
-    loadMarkerCluster();
+    map.addLayer(clusterGroup);
+    clusterGroupRef.current = clusterGroup;
     
     return () => {
       if (clusterGroupRef.current && map) {
@@ -217,14 +212,6 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
     setRecentReallocations(reallocatedDevices);
   }, [events]);
 
-  if (!mounted) {
-    return (
-      <div className="w-full h-full bg-slate-900 flex items-center justify-center">
-        <div className="text-slate-400">Loading Fleet Map...</div>
-      </div>
-    );
-  }
-
   const isDispatchActive = dispatch && dispatch.status === 'executing';
 
   const deviceSummary = useMemo(() => {
@@ -238,6 +225,14 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
       working: devices.filter(d => d.currentSetpointKw > 0).length,
     };
   }, [devices]);
+
+  if (!mounted) {
+    return (
+      <div className="w-full h-full bg-slate-900 flex items-center justify-center">
+        <div className="text-slate-400">Loading Fleet Map...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full h-full relative">
