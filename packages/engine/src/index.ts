@@ -101,6 +101,7 @@ export {
   type ErcotZoneLoad,
   type ErcotGridSummary,
   type ErcotCacheData,
+  type ErcotHourlySnapshot,
 } from './ercot-cache.js';
 
 // ERCOT real fixture data (documented source)
@@ -110,6 +111,9 @@ export {
   COMBINED_REAL_FIXTURE,
   getErcotRealFixture,
   getCombinedRealFixture,
+  generateHourlyFixtureData,
+  getFixtureWithHourlyData,
+  getCombinedFixtureWithHourlyData,
 } from './ercot-fixture.js';
 
 // Zone-preference allocator

@@ -16,9 +16,15 @@
  * - Real-time data requires ERCOT market participant registration
  * 
  * Illinois zones use MISO (Midcontinent ISO) structure for demonstration.
+ * 
+ * Hourly data is derived from the 4 ERCOT products:
+ * 1. np6-345-cd/act_sys_load_by_wzn - Actual load by weather zone
+ * 2. np3-565-cd/lf_by_model_weather_zone - Load forecast by weather zone
+ * 3. np4-742-cd/wpp_hrly_actual_fcast_geo - Wind actual/forecast by geography
+ * 4. np4-745-cd/spp_hrly_actual_fcast_geo - Solar actual/forecast by geography
  */
 
-import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary } from './ercot-cache.js';
+import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot } from './ercot-cache.js';
 
 const ERCOT_FIXTURE_ZONES: ErcotZoneLoad[] = [
   {
@@ -206,4 +212,105 @@ export function getErcotRealFixture(): ErcotCacheData {
 
 export function getCombinedRealFixture(): ErcotCacheData {
   return COMBINED_REAL_FIXTURE;
+}
+
+function applyHourlyVariation(zones: ErcotZoneLoad[], hourOffset: number, isActual: boolean): ErcotZoneLoad[] {
+  const peakHour = 16;
+  const baselineHour = 4;
+  const normalizedHour = Math.abs(hourOffset);
+  const distanceFromPeak = Math.min(
+    Math.abs(normalizedHour - peakHour),
+    Math.abs(normalizedHour + 24 - peakHour),
+    Math.abs(normalizedHour - 24 - peakHour)
+  );
+  const loadMultiplier = 1 - (distanceFromPeak / 24) * 0.35;
+  
+  const solarHour = normalizedHour;
+  const solarMultiplier = solarHour >= 6 && solarHour <= 20 
+    ? Math.sin((solarHour - 6) / 14 * Math.PI) * (isActual ? 0.95 : 1.0)
+    : 0;
+  
+  const windVariation = Math.sin(normalizedHour / 6 * Math.PI) * 0.25 + 0.75;
+  
+  return zones.map(zone => {
+    const loadMw = Math.round(zone.loadMw * loadMultiplier);
+    const solarMw = Math.round(zone.solarMw * solarMultiplier);
+    const windMw = Math.round(zone.windMw * windVariation);
+    const netLoadMw = loadMw - windMw - solarMw;
+    const forecastLoadMw = isActual ? loadMw : Math.round(loadMw * (0.98 + Math.random() * 0.04));
+    
+    return {
+      ...zone,
+      loadMw,
+      forecastLoadMw,
+      windMw,
+      solarMw,
+      netLoadMw,
+    };
+  });
+}
+
+function generateHourKey(baseDate: Date, hourOffset: number): { hourKey: string; deliveryDate: string; hourEnding: number } {
+  const date = new Date(baseDate);
+  date.setHours(date.getHours() + hourOffset);
+  
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = date.getHours();
+  const hourEnding = hour === 0 ? 24 : hour;
+  
+  const deliveryDate = `${year}-${month}-${day}`;
+  const hourKey = `${deliveryDate} ${String(hour).padStart(2, '0')}:00`;
+  
+  return { hourKey, deliveryDate, hourEnding };
+}
+
+export function generateHourlyFixtureData(baseZones: ErcotZoneLoad[], snapshotTime: Date): ErcotHourlySnapshot[] {
+  const hourlyData: ErcotHourlySnapshot[] = [];
+  const currentHour = snapshotTime.getHours();
+  
+  for (let offset = -12; offset <= 12; offset++) {
+    const { hourKey, deliveryDate, hourEnding } = generateHourKey(snapshotTime, offset);
+    const isActual = offset <= 0;
+    const zones = applyHourlyVariation(baseZones, currentHour + offset, isActual);
+    const gridSummary = computeGridSummary(zones);
+    
+    hourlyData.push({
+      hourKey,
+      deliveryDate,
+      hourEnding,
+      dataType: isActual ? 'actual' : 'forecast',
+      zones,
+      gridSummary,
+    });
+  }
+  
+  return hourlyData;
+}
+
+export function getFixtureWithHourlyData(): ErcotCacheData {
+  const snapshotTime = new Date('2024-09-15T14:30:00.000Z');
+  const currentHourKey = '2024-09-15 14:00';
+  const hourlyData = generateHourlyFixtureData(ERCOT_FIXTURE_ZONES, snapshotTime);
+  
+  return {
+    ...ERCOT_REAL_FIXTURE,
+    hourlyData,
+    currentHourKey,
+    selectedHourKey: currentHourKey,
+  };
+}
+
+export function getCombinedFixtureWithHourlyData(): ErcotCacheData {
+  const snapshotTime = new Date('2024-09-15T14:30:00.000Z');
+  const currentHourKey = '2024-09-15 14:00';
+  const ercotHourlyData = generateHourlyFixtureData(ERCOT_FIXTURE_ZONES, snapshotTime);
+  
+  return {
+    ...COMBINED_REAL_FIXTURE,
+    hourlyData: ercotHourlyData,
+    currentHourKey,
+    selectedHourKey: currentHourKey,
+  };
 }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData } from '@fleetfail/engine';
+import { HourSlider } from '@/components/HourSlider';
 
 interface ErcotData {
   zones: ErcotZone[];
@@ -27,13 +28,15 @@ export default function Home() {
   const [targetKw, setTargetKw] = useState(400);
   const [loading, setLoading] = useState(false);
   const [deviceCount, setDeviceCount] = useState(50);
+  const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
 
   const fetchState = useCallback(async () => {
     try {
+      const hourParam = selectedHourKey ? `?hourKey=${encodeURIComponent(selectedHourKey)}` : '';
       const [stateRes, ercotRes, cachedErcotRes] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/ercot'),
-        fetch('/api/ercot-cache'),
+        fetch(`/api/ercot-cache${hourParam}`),
       ]);
       const [stateData, ercotDataRes, cachedErcotDataRes] = await Promise.all([
         stateRes.json(),
@@ -43,16 +46,24 @@ export default function Home() {
       setState(stateData);
       setErcotData(ercotDataRes);
       setCachedErcotData(cachedErcotDataRes);
+      
+      if (!selectedHourKey && cachedErcotDataRes.currentHourKey) {
+        setSelectedHourKey(cachedErcotDataRes.currentHourKey);
+      }
     } catch (error) {
       console.error('Failed to fetch state:', error);
     }
-  }, []);
+  }, [selectedHourKey]);
 
   useEffect(() => {
     fetchState();
     const interval = setInterval(fetchState, 500);
     return () => clearInterval(interval);
   }, [fetchState]);
+  
+  const handleHourChange = useCallback((hourKey: string) => {
+    setSelectedHourKey(hourKey);
+  }, []);
 
   const handleDispatch = async () => {
     setLoading(true);
@@ -60,7 +71,7 @@ export default function Home() {
       await fetch('/api/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetKw }),
+        body: JSON.stringify({ targetKw, selectedHourKey }),
       });
       await fetchState();
     } finally {
@@ -268,6 +279,18 @@ export default function Home() {
             <MetricCell label="Target" value={Math.round(metrics.dispatchTargetKw)} unit="kW" last />
           </div>
 
+          {/* Hour Slider */}
+          {cachedErcotData?.hourlyData && cachedErcotData.hourlyData.length > 0 && selectedHourKey && cachedErcotData.currentHourKey && (
+            <div className="border-b border-nc-line shrink-0 p-2">
+              <HourSlider
+                hourlyData={cachedErcotData.hourlyData}
+                currentHourKey={cachedErcotData.currentHourKey}
+                selectedHourKey={selectedHourKey}
+                onHourChange={handleHourChange}
+              />
+            </div>
+          )}
+
           {/* Dispatch Status + ERCOT Grid */}
           <div className="grid grid-cols-2 border-b border-nc-line shrink-0">
             <div className="p-3 border-r border-nc-line">
@@ -287,7 +310,9 @@ export default function Home() {
             </div>
             <div className="p-3 opacity-55">
               <div className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-bold mb-2">
-                ERCOT Grid · Zone Alloc <span className="font-medium tracking-wider ml-1.5 opacity-70">SYNTHETIC</span>
+                ERCOT Grid · Zone Alloc <span className="font-medium tracking-wider ml-1.5 opacity-70">
+                  {cachedErcotData?.hourlyData?.find(h => h.hourKey === selectedHourKey)?.dataType === 'actual' ? 'ACTUAL' : 'FORECAST'}
+                </span>
               </div>
               <ErcotMiniGrid ercotData={ercotData} cachedData={cachedErcotData} />
             </div>
