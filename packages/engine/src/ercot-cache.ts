@@ -50,17 +50,38 @@ export interface ErcotGridSummary {
   operatingCondition: 'normal' | 'watch' | 'emergency';
 }
 
+export interface ErcotHourlySnapshot {
+  /** Hour key in format "YYYY-MM-DD HH:00" */
+  hourKey: string;
+  /** Delivery date (YYYY-MM-DD) */
+  deliveryDate: string;
+  /** Hour ending (1-24, ERCOT convention) */
+  hourEnding: number;
+  /** Whether this is actual (historical) or forecast data */
+  dataType: 'actual' | 'forecast';
+  /** Zone-level load data for this hour */
+  zones: ErcotZoneLoad[];
+  /** Grid-wide summary for this hour */
+  gridSummary: ErcotGridSummary;
+}
+
 export interface ErcotCacheData {
   /** When data was cached (ISO timestamp) */
   cachedAt: string;
   /** Cache label for display */
   cacheLabel: string;
-  /** Zone-level load data */
+  /** Zone-level load data (current/selected hour) */
   zones: ErcotZoneLoad[];
-  /** Grid-wide summary */
+  /** Grid-wide summary (current/selected hour) */
   gridSummary: ErcotGridSummary;
   /** Snapshot ID for determinism */
   snapshotId: string;
+  /** Hourly data from 4 ERCOT products (actuals + forecasts) */
+  hourlyData?: ErcotHourlySnapshot[];
+  /** Currently selected hour key */
+  selectedHourKey?: string;
+  /** Current hour key (for "now" marker) */
+  currentHourKey?: string;
 }
 
 const ZONE_BASE_DATA: Record<string, { name: string; baseLoadMw: number; windCapacity: number; solarCapacity: number; avgTempF: number }> = {

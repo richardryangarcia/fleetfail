@@ -14,7 +14,7 @@
 
 import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
-import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary } from '@fleetfail/engine';
+import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot } from '@fleetfail/engine';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -275,84 +275,42 @@ function distributeRenewableToZones(
   }
 }
 
-export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
-  const [actualLoad, loadForecast, windData, solarData] = await Promise.all([
-    fetchActualLoadByWeatherZone(),
-    fetchLoadForecastByWeatherZone(),
-    fetchWindActualAndForecast(),
-    fetchSolarActualAndForecast(),
-  ]);
-  
-  const latestLoad = actualLoad[0];
-  const latestForecast = loadForecast[0];
-  
-  if (!latestLoad) {
-    throw new Error('No load data available from ERCOT API');
+function getLoadValue(load: ActualLoadByZone | LoadForecastByZone, key: string): number {
+  switch (key) {
+    case 'coast': return load.coast;
+    case 'east': return load.east;
+    case 'farWest': return load.farWest;
+    case 'north': return load.north;
+    case 'northCentral': return load.northCentral;
+    case 'southCentral': return load.southCentral;
+    case 'southern': return load.southern;
+    case 'west': return load.west;
+    default: return 0;
   }
+}
+
+function parseHourKey(deliveryDate: string, hourEnding: string): { hourKey: string; hourEndingNum: number } {
+  const hourEndingNum = parseInt(hourEnding.replace(':00', '').trim(), 10);
+  const displayHour = hourEndingNum === 24 ? 0 : hourEndingNum;
+  const hourKey = `${deliveryDate} ${String(displayHour).padStart(2, '0')}:00`;
+  return { hourKey, hourEndingNum };
+}
+
+function buildZonesFromLoadData(
+  loadData: ActualLoadByZone | LoadForecastByZone,
+  windByHourZone: Map<string, Map<string, number>>,
+  solarByHourZone: Map<string, Map<string, number>>,
+  hourKey: string,
+  isActual: boolean
+): ErcotZoneLoad[] {
+  const windZones = windByHourZone.get(hourKey) || new Map<string, number>();
+  const solarZones = solarByHourZone.get(hourKey) || new Map<string, number>();
   
-  const windByZone = new Map<string, number>();
-  const solarByZone = new Map<string, number>();
-  
-  const latestWindByRegion = new Map<string, WindActualForecast>();
-  for (const w of windData) {
-    const region = w.geoRegion || 'SYSTEM';
-    if (!latestWindByRegion.has(region)) {
-      latestWindByRegion.set(region, w);
-    }
-  }
-  
-  for (const [, w] of latestWindByRegion) {
-    const actual = w.actual ?? w.stppf ?? 0;
-    distributeRenewableToZones(actual, w.geoRegion, windByZone);
-  }
-  
-  const latestSolarByRegion = new Map<string, SolarActualForecast>();
-  for (const s of solarData) {
-    const region = s.geoRegion || 'SYSTEM';
-    if (!latestSolarByRegion.has(region)) {
-      latestSolarByRegion.set(region, s);
-    }
-  }
-  
-  for (const [, s] of latestSolarByRegion) {
-    const actual = s.actual ?? s.stppf ?? 0;
-    distributeRenewableToZones(actual, s.geoRegion, solarByZone);
-  }
-  
-  function getLoadValue(load: ActualLoadByZone, key: string): number {
-    switch (key) {
-      case 'coast': return load.coast;
-      case 'east': return load.east;
-      case 'farWest': return load.farWest;
-      case 'north': return load.north;
-      case 'northCentral': return load.northCentral;
-      case 'southCentral': return load.southCentral;
-      case 'southern': return load.southern;
-      case 'west': return load.west;
-      default: return 0;
-    }
-  }
-  
-  function getForecastValue(forecast: LoadForecastByZone | undefined, key: string, fallback: number): number {
-    if (!forecast) return fallback;
-    switch (key) {
-      case 'coast': return forecast.coast;
-      case 'east': return forecast.east;
-      case 'farWest': return forecast.farWest;
-      case 'north': return forecast.north;
-      case 'northCentral': return forecast.northCentral;
-      case 'southCentral': return forecast.southCentral;
-      case 'southern': return forecast.southern;
-      case 'west': return forecast.west;
-      default: return fallback;
-    }
-  }
-  
-  const zones: ErcotZoneLoad[] = Object.entries(ZONE_MAPPING).map(([key, zone]) => {
-    const loadMw = Math.round(getLoadValue(latestLoad, key));
-    const forecastLoadMw = Math.round(getForecastValue(latestForecast, key, loadMw));
-    const windMw = Math.round(windByZone.get(zone.id) || 0);
-    const solarMw = Math.round(solarByZone.get(zone.id) || 0);
+  return Object.entries(ZONE_MAPPING).map(([key, zone]) => {
+    const loadMw = Math.round(getLoadValue(loadData, key));
+    const forecastLoadMw = isActual ? loadMw : Math.round(loadMw);
+    const windMw = Math.round(windZones.get(zone.id) || 0);
+    const solarMw = Math.round(solarZones.get(zone.id) || 0);
     const netLoadMw = loadMw - windMw - solarMw;
     
     return {
@@ -367,13 +325,15 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
       windSpeedMph: 12,
     };
   });
-  
+}
+
+function computeGridSummary(zones: ErcotZoneLoad[]): ErcotGridSummary {
   const totalLoadMw = zones.reduce((sum, z) => sum + z.loadMw, 0);
   const totalWindMw = zones.reduce((sum, z) => sum + z.windMw, 0);
   const totalSolarMw = zones.reduce((sum, z) => sum + z.solarMw, 0);
   const totalRenewablesMw = totalWindMw + totalSolarMw;
   
-  const gridSummary: ErcotGridSummary = {
+  return {
     totalLoadMw,
     totalWindMw,
     totalSolarMw,
@@ -383,8 +343,96 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
     frequencyHz: 60.0,
     operatingCondition: 'normal',
   };
+}
+
+export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
+  const [actualLoad, loadForecast, windData, solarData] = await Promise.all([
+    fetchActualLoadByWeatherZone(),
+    fetchLoadForecastByWeatherZone(),
+    fetchWindActualAndForecast(),
+    fetchSolarActualAndForecast(),
+  ]);
+  
+  if (!actualLoad.length && !loadForecast.length) {
+    throw new Error('No load data available from ERCOT API');
+  }
+  
+  const windByHourZone = new Map<string, Map<string, number>>();
+  const solarByHourZone = new Map<string, Map<string, number>>();
+  
+  for (const w of windData) {
+    const { hourKey } = parseHourKey(w.deliveryDate, w.hourEnding);
+    if (!windByHourZone.has(hourKey)) {
+      windByHourZone.set(hourKey, new Map<string, number>());
+    }
+    const zoneMap = windByHourZone.get(hourKey)!;
+    const actual = w.actual ?? w.stppf ?? 0;
+    const region = w.geoRegion || 'SYSTEM';
+    const targetZones = GEO_REGION_TO_ZONES[region.toUpperCase()] || GEO_REGION_TO_ZONES['SYSTEM'];
+    const perZone = actual / targetZones.length;
+    for (const zoneId of targetZones) {
+      zoneMap.set(zoneId, (zoneMap.get(zoneId) || 0) + perZone);
+    }
+  }
+  
+  for (const s of solarData) {
+    const { hourKey } = parseHourKey(s.deliveryDate, s.hourEnding);
+    if (!solarByHourZone.has(hourKey)) {
+      solarByHourZone.set(hourKey, new Map<string, number>());
+    }
+    const zoneMap = solarByHourZone.get(hourKey)!;
+    const actual = s.actual ?? s.stppf ?? 0;
+    const region = s.geoRegion || 'SYSTEM';
+    const targetZones = GEO_REGION_TO_ZONES[region.toUpperCase()] || GEO_REGION_TO_ZONES['SYSTEM'];
+    const perZone = actual / targetZones.length;
+    for (const zoneId of targetZones) {
+      zoneMap.set(zoneId, (zoneMap.get(zoneId) || 0) + perZone);
+    }
+  }
+  
+  const hourlySnapshots: ErcotHourlySnapshot[] = [];
+  const processedHours = new Set<string>();
+  
+  for (const load of actualLoad) {
+    const { hourKey, hourEndingNum } = parseHourKey(load.deliveryDate, load.hourEnding);
+    if (processedHours.has(hourKey)) continue;
+    processedHours.add(hourKey);
+    
+    const zones = buildZonesFromLoadData(load, windByHourZone, solarByHourZone, hourKey, true);
+    hourlySnapshots.push({
+      hourKey,
+      deliveryDate: load.deliveryDate,
+      hourEnding: hourEndingNum,
+      dataType: 'actual',
+      zones,
+      gridSummary: computeGridSummary(zones),
+    });
+  }
+  
+  for (const forecast of loadForecast) {
+    const { hourKey, hourEndingNum } = parseHourKey(forecast.deliveryDate, forecast.hourEnding);
+    if (processedHours.has(hourKey)) continue;
+    processedHours.add(hourKey);
+    
+    const zones = buildZonesFromLoadData(forecast, windByHourZone, solarByHourZone, hourKey, false);
+    hourlySnapshots.push({
+      hourKey,
+      deliveryDate: forecast.deliveryDate,
+      hourEnding: hourEndingNum,
+      dataType: 'forecast',
+      zones,
+      gridSummary: computeGridSummary(zones),
+    });
+  }
+  
+  hourlySnapshots.sort((a, b) => a.hourKey.localeCompare(b.hourKey));
   
   const captureTime = new Date();
+  const currentHour = captureTime.getHours();
+  const currentDate = captureTime.toISOString().split('T')[0];
+  const currentHourKey = `${currentDate} ${String(currentHour).padStart(2, '0')}:00`;
+  
+  const currentSnapshot = hourlySnapshots.find(h => h.hourKey === currentHourKey) || hourlySnapshots[0];
   
   return {
     cachedAt: captureTime.toISOString(),
@@ -395,9 +443,12 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
       minute: '2-digit',
       hour12: true,
     })})`,
-    zones,
-    gridSummary,
+    zones: currentSnapshot?.zones || [],
+    gridSummary: currentSnapshot?.gridSummary || computeGridSummary([]),
     snapshotId: `ERCOT-LIVE-${captureTime.getTime()}`,
+    hourlyData: hourlySnapshots,
+    currentHourKey,
+    selectedHourKey: currentHourKey,
   };
 }
 

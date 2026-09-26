@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, ErcotCacheData } from '@fleetfail/engine';
 import { MapSideStrip } from '@/components/MapSideStrip';
+import { HourSlider } from '@/components/HourSlider';
 
 const TexasMap = dynamic(
   () => import('@/components/TexasMap').then(mod => mod.TexasMap),
@@ -28,12 +29,14 @@ interface MapState {
 export default function MapPage() {
   const [state, setState] = useState<MapState | null>(null);
   const [ercotData, setErcotData] = useState<ErcotCacheData | null>(null);
+  const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
 
   const fetchState = useCallback(async () => {
     try {
+      const hourParam = selectedHourKey ? `?hourKey=${encodeURIComponent(selectedHourKey)}` : '';
       const [stateRes, ercotRes] = await Promise.all([
         fetch('/api/state'),
-        fetch('/api/ercot-cache'),
+        fetch(`/api/ercot-cache${hourParam}`),
       ]);
       const [stateData, ercotDataRes] = await Promise.all([
         stateRes.json(),
@@ -41,16 +44,24 @@ export default function MapPage() {
       ]);
       setState(stateData);
       setErcotData(ercotDataRes);
+      
+      if (!selectedHourKey && ercotDataRes.currentHourKey) {
+        setSelectedHourKey(ercotDataRes.currentHourKey);
+      }
     } catch (error) {
       console.error('Failed to fetch state:', error);
     }
-  }, []);
+  }, [selectedHourKey]);
 
   useEffect(() => {
     fetchState();
     const interval = setInterval(fetchState, 500);
     return () => clearInterval(interval);
   }, [fetchState]);
+  
+  const handleHourChange = useCallback((hourKey: string) => {
+    setSelectedHourKey(hourKey);
+  }, []);
 
   const handleDeviceClick = async (deviceId: string) => {
     await fetch('/api/fault', {
@@ -65,7 +76,7 @@ export default function MapPage() {
     await fetch('/api/dispatch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetKw }),
+      body: JSON.stringify({ targetKw, selectedHourKey }),
     });
     await fetchState();
   };
@@ -110,6 +121,17 @@ export default function MapPage() {
     <div className="h-screen flex flex-col bg-nc-bg">
       <main className="flex-1 flex overflow-hidden">
         <div className="flex-1 relative">
+          {/* Hour Slider at top of map */}
+          {ercotData?.hourlyData && ercotData.hourlyData.length > 0 && selectedHourKey && ercotData.currentHourKey && (
+            <div className="absolute top-3 left-3 right-3 z-10 max-w-md">
+              <HourSlider
+                hourlyData={ercotData.hourlyData}
+                currentHourKey={ercotData.currentHourKey}
+                selectedHourKey={selectedHourKey}
+                onHourChange={handleHourChange}
+              />
+            </div>
+          )}
           <TexasMap
             devices={state.devices}
             events={state.events}
