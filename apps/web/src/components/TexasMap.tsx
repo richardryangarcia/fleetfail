@@ -1,12 +1,9 @@
 'use client';
 
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
 import type { Device, FleetEvent, ErcotCacheData, Dispatch } from '@fleetfail/engine';
-import L from 'leaflet';
-import 'leaflet.markercluster';
-import { useMap } from 'react-leaflet';
 
 const MapContainer = dynamic(
   () => import('react-leaflet').then(mod => mod.MapContainer),
@@ -28,89 +25,93 @@ interface TexasMapProps {
 
 const FLEET_CENTER: [number, number] = [36.0, -94.0];
 const FLEET_ZOOM = 5;
+const MAX_ZOOM = 18;
 
-function createDeviceIcon(device: Device, isWorking: boolean, isCovering: boolean): L.DivIcon {
-  let bgColor = '#4a5260';
-  let borderColor = bgColor;
-  let size = 12;
-  let extraClass = '';
-  let labelClass = 'kw-label';
-  
-  if (device.status === 'offline') {
-    bgColor = '#e05454';
-    borderColor = '#e05454';
-  } else if (isCovering && isWorking) {
-    bgColor = '#3dba7a';
-    borderColor = '#3dba7a';
-    size = 18;
-    extraClass = 'covering-marker';
-    labelClass = 'kw-label covering-label';
-  } else if (isWorking) {
-    bgColor = '#f0a020';
-    borderColor = '#f0a020';
-    size = 18;
-    extraClass = 'working-marker';
-  }
-  
-  const html = `
-    <div class="device-marker ${extraClass}" style="
-      width: ${size}px;
-      height: ${size}px;
-      background: ${bgColor};
-      border: 2px solid ${borderColor};
-      border-radius: 50%;
-      box-shadow: 0 0 4px rgba(0,0,0,0.5);
-    "></div>
-    ${isWorking ? `<div class="${labelClass}">${device.currentSetpointKw.toFixed(0)}kW</div>` : ''}
-  `;
-  
-  return L.divIcon({
-    className: 'custom-device-icon',
-    html,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-  });
-}
-
-function createPopupContent(device: Device, isCovering: boolean = false): string {
-  const atMax = device.currentSetpointKw >= device.maxPowerKw - 0.1;
-  const coveringBadge = isCovering 
-    ? `<div style="margin-top: 4px; padding: 2px 6px; background: #1a2518; border: 1px solid #2a4528; color: #3dba7a; font-size: 10px; font-weight: 600;">
-        ${atMax ? '↑ AT MAX — covering slack' : '↑ COVERING SLACK'}
-       </div>`
-    : '';
-  
-  return `
-    <div class="device-popup">
-      <div style="font-weight: 600; color: #e8edf2;">${device.name}</div>
-      <div style="color: #6b7380;">Region: ${device.region} | Zone: ${device.zone}</div>
-      <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW max)</div>
-      <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
-      <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
-      ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
-      ${coveringBadge}
-    </div>
-  `;
-}
-
-type DeviceMarker = L.Marker & { deviceData?: Device };
-
-function ClusterLayer({ 
+function ClusterLayerInner({ 
   devices, 
   onDeviceClick, 
-  recentReallocations 
+  recentReallocations,
+  L,
+  useMap,
 }: { 
   devices: Device[]; 
   onDeviceClick: (deviceId: string) => void;
   recentReallocations: Set<string>;
+  L: typeof import('leaflet');
+  useMap: () => import('leaflet').Map;
 }) {
   const map = useMap();
-  const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null);
+  type DeviceMarker = import('leaflet').Marker & { deviceData?: Device };
+  const clusterGroupRef = useRef<import('leaflet').MarkerClusterGroup | null>(null);
   const markersRef = useRef<Map<string, DeviceMarker>>(new Map());
   const onDeviceClickRef = useRef(onDeviceClick);
   const recentReallocationsRef = useRef(recentReallocations);
   onDeviceClickRef.current = onDeviceClick;
   recentReallocationsRef.current = recentReallocations;
+
+  const createDeviceIcon = useCallback((device: Device, isWorking: boolean, isCovering: boolean): import('leaflet').DivIcon => {
+    let bgColor = '#4a5260';
+    let borderColor = bgColor;
+    let size = 12;
+    let extraClass = '';
+    let labelClass = 'kw-label';
+    
+    if (device.status === 'offline') {
+      bgColor = '#e05454';
+      borderColor = '#e05454';
+    } else if (isCovering && isWorking) {
+      bgColor = '#3dba7a';
+      borderColor = '#3dba7a';
+      size = 18;
+      extraClass = 'covering-marker';
+      labelClass = 'kw-label covering-label';
+    } else if (isWorking) {
+      bgColor = '#f0a020';
+      borderColor = '#f0a020';
+      size = 18;
+      extraClass = 'working-marker';
+    }
+    
+    const html = `
+      <div class="device-marker ${extraClass}" style="
+        width: ${size}px;
+        height: ${size}px;
+        background: ${bgColor};
+        border: 2px solid ${borderColor};
+        border-radius: 50%;
+        box-shadow: 0 0 4px rgba(0,0,0,0.5);
+      "></div>
+      ${isWorking ? `<div class="${labelClass}">${device.currentSetpointKw.toFixed(0)}kW</div>` : ''}
+    `;
+    
+    return L.divIcon({
+      className: 'custom-device-icon',
+      html,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+  }, [L]);
+
+  const createPopupContent = useCallback((device: Device, isCovering: boolean = false): string => {
+    const atMax = device.currentSetpointKw >= device.maxPowerKw - 0.1;
+    const coveringBadge = isCovering 
+      ? `<div style="margin-top: 4px; padding: 2px 6px; background: #1a2518; border: 1px solid #2a4528; color: #3dba7a; font-size: 10px; font-weight: 600;">
+          ${atMax ? '↑ AT MAX — covering slack' : '↑ COVERING SLACK'}
+         </div>`
+      : '';
+    
+    return `
+      <div class="device-popup">
+        <div style="font-weight: 600; color: #e8edf2;">${device.name}</div>
+        <div style="color: #6b7380;">Region: ${device.region} | Zone: ${device.zone}</div>
+        <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW max)</div>
+        <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
+        <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
+        ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
+        ${coveringBadge}
+      </div>
+    `;
+  }, []);
 
   useEffect(() => {
     if (!map || typeof window === 'undefined') return;
@@ -184,7 +185,7 @@ function ClusterLayer({
       }
       markersRef.current.clear();
     };
-  }, [map]);
+  }, [map, L]);
 
   useEffect(() => {
     const clusterGroup = clusterGroupRef.current;
@@ -234,9 +235,47 @@ function ClusterLayer({
     }
 
     clusterGroup.refreshClusters();
-  }, [devices, recentReallocations]);
+  }, [devices, recentReallocations, createDeviceIcon, createPopupContent, L]);
   
   return null;
+}
+
+function ClusterLayer(props: { 
+  devices: Device[]; 
+  onDeviceClick: (deviceId: string) => void;
+  recentReallocations: Set<string>;
+}) {
+  const [leafletModules, setLeafletModules] = useState<{
+    L: typeof import('leaflet');
+    useMap: () => import('leaflet').Map;
+  } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    
+    (async () => {
+      const [leaflet, reactLeaflet] = await Promise.all([
+        import('leaflet'),
+        import('react-leaflet'),
+      ]);
+      await import('leaflet.markercluster');
+      
+      if (mounted) {
+        setLeafletModules({
+          L: leaflet.default,
+          useMap: reactLeaflet.useMap,
+        });
+      }
+    })();
+    
+    return () => { mounted = false; };
+  }, []);
+
+  if (!leafletModules) {
+    return null;
+  }
+
+  return <ClusterLayerInner {...props} L={leafletModules.L} useMap={leafletModules.useMap} />;
 }
 
 export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, onZoneClick }: TexasMapProps) {
@@ -291,12 +330,14 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
       <MapContainer
         center={FLEET_CENTER}
         zoom={FLEET_ZOOM}
+        maxZoom={MAX_ZOOM}
         className="w-full h-full"
         style={{ background: '#0a0b0d' }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={MAX_ZOOM}
         />
         
         <ClusterLayer 
