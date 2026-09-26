@@ -25,7 +25,7 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot } from '@fleetfail/engine';
-import { FleetDb, encodeErcotSort } from '@fleetfail/engine';
+import { FleetDb } from '@fleetfail/engine';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -208,6 +208,48 @@ interface ErcotApiResponse<T> {
   };
 }
 
+// ============================================================================
+// CLIENT-SIDE SORTING HELPERS
+// ============================================================================
+// ERCOT API uses separate sort & dir params and only supports single-field sorting.
+// To avoid 400 errors and get consistent multi-field ordering, we omit sort params
+// and sort client-side after fetching.
+// ============================================================================
+
+interface HasDeliveryDateHour {
+  deliveryDate: string;
+  hourEnding: string;
+}
+
+function sortByDeliveryDateHourDesc<T extends HasDeliveryDateHour>(data: T[]): T[] {
+  return [...data].sort((a, b) => {
+    const dateCompare = b.deliveryDate.localeCompare(a.deliveryDate);
+    if (dateCompare !== 0) return dateCompare;
+    const hourA = parseInt(a.hourEnding.replace(':00', '').trim(), 10);
+    const hourB = parseInt(b.hourEnding.replace(':00', '').trim(), 10);
+    return hourB - hourA;
+  });
+}
+
+interface HasDeliveryDateHourInterval {
+  deliveryDate: string;
+  deliveryHour: string;
+  deliveryInterval: string;
+}
+
+function sortByDeliveryDateHourIntervalDesc<T extends HasDeliveryDateHourInterval>(data: T[]): T[] {
+  return [...data].sort((a, b) => {
+    const dateCompare = b.deliveryDate.localeCompare(a.deliveryDate);
+    if (dateCompare !== 0) return dateCompare;
+    const hourA = parseInt(a.deliveryHour, 10);
+    const hourB = parseInt(b.deliveryHour, 10);
+    if (hourB !== hourA) return hourB - hourA;
+    const intervalA = parseInt(a.deliveryInterval, 10);
+    const intervalB = parseInt(b.deliveryInterval, 10);
+    return intervalB - intervalA;
+  });
+}
+
 interface ActualLoadByZone {
   deliveryDate: string;
   hourEnding: string;
@@ -265,11 +307,11 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
       size: 24,
-      sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
     },
   });
   
-  return response.data.data || [];
+  const data = response.data.data || [];
+  return sortByDeliveryDateHourDesc(data);
 }
 
 export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZone[]> {
@@ -279,11 +321,11 @@ export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZo
   const response = await client.get<ErcotApiResponse<LoadForecastByZone>>('/np3-565-cd/lf_by_model_weather_zone', {
     params: {
       size: 24,
-      sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
     },
   });
   
-  return response.data.data || [];
+  const data = response.data.data || [];
+  return sortByDeliveryDateHourDesc(data);
 }
 
 export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]> {
@@ -293,11 +335,11 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
   const response = await client.get<ErcotApiResponse<WindActualForecast>>('/np4-742-cd/wpp_hrly_actual_fcast_geo', {
     params: {
       size: 100,
-      sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
     },
   });
   
-  return response.data.data || [];
+  const data = response.data.data || [];
+  return sortByDeliveryDateHourDesc(data);
 }
 
 export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast[]> {
@@ -314,12 +356,11 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
       const response = await client.get<ErcotApiResponse<SolarActualForecast>>(path, {
         params: {
           size: 100,
-          sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
         },
       });
       
       if (response.data.data && response.data.data.length > 0) {
-        return response.data.data;
+        return sortByDeliveryDateHourDesc(response.data.data);
       }
     } catch (err: unknown) {
       const axiosErr = err as AxiosError;
@@ -689,12 +730,11 @@ export async function fetchSppRealTime(
       params: {
         settlementPoint,
         size: 100,
-        sort: encodeErcotSort(['deliveryDate desc', 'deliveryHour desc', 'deliveryInterval desc']),
       },
     }
   );
   
-  const records = response.data.data || [];
+  const records = sortByDeliveryDateHourIntervalDesc(response.data.data || []);
   
   return records.map((record) => {
     const hour = parseInt(record.deliveryHour, 10);
@@ -730,12 +770,11 @@ export async function fetchSppDayAhead(
       params: {
         settlementPoint,
         size: 48,
-        sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
       },
     }
   );
   
-  const records = response.data.data || [];
+  const records = sortByDeliveryDateHourDesc(response.data.data || []);
   
   return records.map((record) => {
     const hourEnding = parseInt(record.hourEnding.replace(':00', '').trim(), 10);
