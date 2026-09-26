@@ -4,7 +4,8 @@
   "private": true,
   "description": "Resilient Dispatch Simulator - Synthetic residential battery fleet orchestrator",
   "scripts": {
-    "dev": "pnpm --filter @fleetfail/web dev",
+    "postinstall": "pnpm --filter @fleetfail/engine build",
+    "dev": "pnpm --filter @fleetfail/engine build && pnpm --filter @fleetfail/web dev",
     "build": "pnpm --filter @fleetfail/engine build && pnpm --filter @fleetfail/web build",
     "test": "pnpm --filter @fleetfail/engine test",
     "test:watch": "pnpm --filter @fleetfail/engine test:watch",
