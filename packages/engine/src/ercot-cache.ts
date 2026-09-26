@@ -5,11 +5,12 @@
  * The data structure mirrors real ERCOT API responses but values are
  * from a cached snapshot, not live data.
  * 
- * For demo purposes, we use realistic data ranges based on public
- * ERCOT historical patterns.
+ * SOURCE: Real fixture data from ERCOT Grid Operations Dashboard
+ * See ercot-fixture.ts for data provenance and documentation.
  */
 
 import { SeededRandom } from './random.js';
+import { COMBINED_REAL_FIXTURE } from './ercot-fixture.js';
 
 export interface ErcotZoneLoad {
   zoneId: string;
@@ -176,11 +177,13 @@ let cachedSnapshot: ErcotCacheData | null = null;
 
 /**
  * Get or create the ERCOT cache singleton.
- * Uses a default seed for consistent demo experience.
+ * Returns real fixture data by default. Pass useSynthetic=true for generated data.
  */
-export function getErcotCache(seed: number = 20260926): ErcotCacheData {
+export function getErcotCache(seed: number = 20260926, useSynthetic: boolean = false): ErcotCacheData {
   if (!cachedSnapshot) {
-    cachedSnapshot = generateErcotCacheSnapshot(seed);
+    cachedSnapshot = useSynthetic 
+      ? generateErcotCacheSnapshot(seed)
+      : COMBINED_REAL_FIXTURE;
   }
   return cachedSnapshot;
 }

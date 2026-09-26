@@ -1,9 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import type { Device, FleetEvent, ErcotCacheData, Dispatch } from '@fleetfail/engine';
+import L from 'leaflet';
+import { useMap } from 'react-leaflet';
 
 const MapContainer = dynamic(
   () => import('react-leaflet').then(mod => mod.MapContainer),
@@ -11,18 +15,6 @@ const MapContainer = dynamic(
 );
 const TileLayer = dynamic(
   () => import('react-leaflet').then(mod => mod.TileLayer),
-  { ssr: false }
-);
-const CircleMarker = dynamic(
-  () => import('react-leaflet').then(mod => mod.CircleMarker),
-  { ssr: false }
-);
-const Popup = dynamic(
-  () => import('react-leaflet').then(mod => mod.Popup),
-  { ssr: false }
-);
-const Tooltip = dynamic(
-  () => import('react-leaflet').then(mod => mod.Tooltip),
   { ssr: false }
 );
 
@@ -35,8 +27,172 @@ interface TexasMapProps {
   onZoneClick?: (zoneId: string) => void;
 }
 
-const TEXAS_CENTER: [number, number] = [31.0, -99.5];
-const TEXAS_ZOOM = 6;
+const FLEET_CENTER: [number, number] = [36.0, -94.0];
+const FLEET_ZOOM = 5;
+
+function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boolean): L.DivIcon {
+  let bgColor = '#3b82f6';
+  let borderColor = bgColor;
+  let size = 12;
+  let extraClass = '';
+  
+  if (device.status === 'offline') {
+    bgColor = '#ef4444';
+    borderColor = '#ef4444';
+  } else if (isWorking) {
+    bgColor = '#22c55e';
+    borderColor = '#ffffff';
+    size = 18;
+    extraClass = 'working-marker';
+  } else if (isReallocated) {
+    borderColor = '#fbbf24';
+  }
+  
+  const html = `
+    <div class="device-marker ${extraClass}" style="
+      width: ${size}px;
+      height: ${size}px;
+      background: ${bgColor};
+      border: 2px solid ${borderColor};
+      border-radius: 50%;
+      box-shadow: 0 0 4px rgba(0,0,0,0.5);
+    "></div>
+    ${isWorking ? `<div class="kw-label">${device.currentSetpointKw.toFixed(0)}kW</div>` : ''}
+  `;
+  
+  return L.divIcon({
+    className: 'custom-device-icon',
+    html,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function ClusterLayer({ 
+  devices, 
+  onDeviceClick, 
+  recentReallocations 
+}: { 
+  devices: Device[]; 
+  onDeviceClick: (deviceId: string) => void;
+  recentReallocations: Set<string>;
+}) {
+  const map = useMap();
+  const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null);
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+  
+  useEffect(() => {
+    if (!map || typeof window === 'undefined') return;
+    
+    const loadMarkerCluster = async () => {
+      await import('leaflet.markercluster');
+      
+      if (clusterGroupRef.current) {
+        map.removeLayer(clusterGroupRef.current);
+        clusterGroupRef.current = null;
+      }
+      
+      const clusterGroup = L.markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 60,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        disableClusteringAtZoom: 10,
+        iconCreateFunction: (cluster) => {
+          const childCount = cluster.getChildCount();
+          const markers = cluster.getAllChildMarkers();
+          
+          let offlineCount = 0;
+          let workingCount = 0;
+          
+          markers.forEach((m) => {
+            const device = (m as L.Marker & { deviceData?: Device }).deviceData;
+            if (device) {
+              if (device.status === 'offline') offlineCount++;
+              if (device.currentSetpointKw > 0) workingCount++;
+            }
+          });
+          
+          let bgColor = '#3b82f6';
+          if (offlineCount > childCount * 0.3) bgColor = '#ef4444';
+          else if (workingCount > 0) bgColor = '#22c55e';
+          
+          const size = childCount < 100 ? 40 : childCount < 1000 ? 50 : 60;
+          
+          return L.divIcon({
+            html: `
+              <div class="cluster-marker" style="
+                width: ${size}px;
+                height: ${size}px;
+                background: ${bgColor};
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-weight: bold;
+                font-size: ${childCount < 100 ? '12px' : '11px'};
+                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+                border: 2px solid rgba(255,255,255,0.3);
+              ">
+                ${childCount >= 1000 ? (childCount / 1000).toFixed(1) + 'k' : childCount}
+              </div>
+            `,
+            className: 'custom-cluster-icon',
+            iconSize: [size, size],
+            iconAnchor: [size / 2, size / 2],
+          });
+        },
+      });
+      
+      devicesRef.current.forEach(device => {
+        const isWorking = device.currentSetpointKw > 0;
+        const isReallocated = recentReallocations.has(device.id) && isWorking;
+        const icon = createDeviceIcon(device, isWorking, isReallocated);
+        
+        const marker = L.marker([device.latitude, device.longitude], { icon }) as L.Marker & { deviceData?: Device };
+        marker.deviceData = device;
+        
+        const popupContent = `
+          <div class="device-popup">
+            <div style="font-weight: 600">${device.name}</div>
+            <div>Region: ${device.region} | Zone: ${device.zone}</div>
+            <div>Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW)</div>
+            <div>Status: <span style="color: ${device.status === 'online' ? '#22c55e' : '#ef4444'}">${device.status}</span></div>
+            <div>SOC: ${device.socPercent.toFixed(1)}%</div>
+            ${device.currentSetpointKw > 0 ? `<div style="color: #22c55e; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
+          </div>
+        `;
+        
+        marker.bindPopup(popupContent);
+        
+        if (device.status === 'online') {
+          marker.on('click', () => {
+            onDeviceClick(device.id);
+          });
+        }
+        
+        clusterGroup.addLayer(marker);
+      });
+      
+      map.addLayer(clusterGroup);
+      clusterGroupRef.current = clusterGroup;
+    };
+    
+    loadMarkerCluster();
+    
+    return () => {
+      if (clusterGroupRef.current && map) {
+        map.removeLayer(clusterGroupRef.current);
+        clusterGroupRef.current = null;
+      }
+    };
+  }, [map, devices, onDeviceClick, recentReallocations]);
+  
+  return null;
+}
 
 export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, onZoneClick }: TexasMapProps) {
   const [mounted, setMounted] = useState(false);
@@ -66,158 +222,119 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
   if (!mounted) {
     return (
       <div className="w-full h-full bg-slate-900 flex items-center justify-center">
-        <div className="text-slate-400">Loading Texas Map...</div>
+        <div className="text-slate-400">Loading Fleet Map...</div>
       </div>
     );
   }
 
   const isDispatchActive = dispatch && dispatch.status === 'executing';
 
-  const getDeviceColor = (device: Device) => {
-    if (device.status === 'offline') return '#ef4444';
-    if (device.currentSetpointKw > 0) return '#22c55e';
-    return '#3b82f6';
-  };
-
-  const getDeviceRadius = (device: Device) => {
-    const baseRadius = 7;
-    if (device.currentSetpointKw > 0) {
-      return baseRadius + Math.min(device.currentSetpointKw / 2, 12);
-    }
-    return baseRadius;
-  };
-
-  const isDeviceWorking = (device: Device) => {
-    return device.currentSetpointKw > 0;
-  };
-
-  const wasReallocatedTo = (device: Device) => {
-    return recentReallocations.has(device.id) && device.currentSetpointKw > 0;
-  };
+  const deviceSummary = useMemo(() => {
+    const txDevices = devices.filter(d => d.region === 'TX');
+    const ilDevices = devices.filter(d => d.region === 'IL');
+    return {
+      total: devices.length,
+      tx: txDevices.length,
+      il: ilDevices.length,
+      online: devices.filter(d => d.status === 'online').length,
+      working: devices.filter(d => d.currentSetpointKw > 0).length,
+    };
+  }, [devices]);
 
   return (
     <div className="w-full h-full relative">
       <MapContainer
-        center={TEXAS_CENTER}
-        zoom={TEXAS_ZOOM}
+        center={FLEET_CENTER}
+        zoom={FLEET_ZOOM}
         className="w-full h-full"
         style={{ background: '#0f172a' }}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         
-        {devices.map((device) => {
-          const working = isDeviceWorking(device);
-          const reallocated = wasReallocatedTo(device);
-          
-          return (
-            <CircleMarker
-              key={device.id}
-              center={[device.latitude, device.longitude]}
-              radius={getDeviceRadius(device)}
-              pathOptions={{
-                fillColor: getDeviceColor(device),
-                fillOpacity: device.status === 'offline' ? 0.4 : working ? 1.0 : 0.7,
-                color: working ? '#ffffff' : reallocated ? '#fbbf24' : getDeviceColor(device),
-                weight: working ? 4 : reallocated ? 3 : 1,
-                className: working ? 'working-marker' : reallocated ? 'reallocated-marker' : '',
-              }}
-              eventHandlers={{
-                click: () => {
-                  if (device.status === 'online') {
-                    onDeviceClick(device.id);
-                  }
-                },
-              }}
-            >
-              {working && (
-                <Tooltip permanent direction="top" offset={[0, -10]} className="kw-tooltip">
-                  <span className="font-bold text-green-600">{device.currentSetpointKw.toFixed(1)} kW</span>
-                </Tooltip>
-              )}
-              <Popup>
-                <div className="text-slate-900 text-sm">
-                  <div className="font-semibold">{device.name}</div>
-                  <div>Zone: {device.zone}</div>
-                  <div>Status: <span className={device.status === 'online' ? 'text-green-600' : 'text-red-600'}>{device.status}</span></div>
-                  <div>SOC: {device.socPercent.toFixed(1)}%</div>
-                  <div>Max Power: {device.maxPowerKw.toFixed(1)} kW</div>
-                  {device.currentSetpointKw > 0 && (
-                    <div className="text-green-600 font-bold text-lg">
-                      ⚡ {device.currentSetpointKw.toFixed(1)} kW ACTIVE
-                    </div>
-                  )}
-                  {device.status === 'online' && (
-                    <button
-                      onClick={() => onDeviceClick(device.id)}
-                      className="mt-2 px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
-                    >
-                      Take Offline
-                    </button>
-                  )}
-                </div>
-              </Popup>
-            </CircleMarker>
-          );
-        })}
+        <ClusterLayer 
+          devices={devices} 
+          onDeviceClick={onDeviceClick}
+          recentReallocations={recentReallocations}
+        />
       </MapContainer>
+      
+      {/* Device count overlay */}
+      <div className="absolute bottom-4 left-4 bg-slate-800/90 text-white px-3 py-2 rounded-lg text-xs z-[1000] border border-slate-600">
+        <div className="font-semibold mb-1">Fleet: {deviceSummary.total.toLocaleString()} devices</div>
+        <div className="flex gap-3 text-slate-300">
+          <span>TX: {deviceSummary.tx.toLocaleString()}</span>
+          <span>IL: {deviceSummary.il.toLocaleString()}</span>
+        </div>
+        <div className="flex gap-3 text-slate-300">
+          <span className="text-green-400">Online: {deviceSummary.online.toLocaleString()}</span>
+          {deviceSummary.working > 0 && (
+            <span className="text-emerald-400 font-bold">Working: {deviceSummary.working}</span>
+          )}
+        </div>
+      </div>
       
       {/* Dispatch hint overlay */}
       {!isDispatchActive && (
         <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-slate-800/90 text-amber-400 px-4 py-2 rounded-lg text-sm font-medium border border-amber-600/50 z-[1000]">
-          💡 Start a dispatch first, then click devices offline to see reallocation
+          Start a dispatch, then click device clusters to zoom in and take devices offline
         </div>
       )}
       
       <style jsx global>{`
         @keyframes pulse-working {
           0% { 
-            opacity: 1; 
             transform: scale(1);
-            filter: drop-shadow(0 0 8px #22c55e);
+            box-shadow: 0 0 4px #22c55e;
           }
           50% { 
-            opacity: 0.7; 
-            transform: scale(1.15);
-            filter: drop-shadow(0 0 16px #22c55e);
+            transform: scale(1.2);
+            box-shadow: 0 0 12px #22c55e;
           }
           100% { 
-            opacity: 1; 
             transform: scale(1);
-            filter: drop-shadow(0 0 8px #22c55e);
-          }
-        }
-        @keyframes glow-reallocated {
-          0%, 100% { 
-            filter: drop-shadow(0 0 4px #fbbf24);
-          }
-          50% { 
-            filter: drop-shadow(0 0 12px #fbbf24);
+            box-shadow: 0 0 4px #22c55e;
           }
         }
         .working-marker {
           animation: pulse-working 0.8s ease-in-out infinite;
         }
-        .reallocated-marker {
-          animation: glow-reallocated 1s ease-in-out infinite;
+        .custom-device-icon {
+          background: transparent !important;
+          border: none !important;
         }
-        .kw-tooltip {
-          background: rgba(0, 0, 0, 0.9) !important;
-          border: 2px solid #22c55e !important;
-          border-radius: 4px !important;
-          padding: 2px 6px !important;
-          font-size: 11px !important;
-          font-weight: bold !important;
-          color: #22c55e !important;
-          box-shadow: 0 0 10px rgba(34, 197, 94, 0.5) !important;
+        .custom-cluster-icon {
+          background: transparent !important;
+          border: none !important;
         }
-        .kw-tooltip::before {
-          border-top-color: #22c55e !important;
+        .kw-label {
+          position: absolute;
+          top: -18px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.9);
+          color: #22c55e;
+          font-size: 10px;
+          font-weight: bold;
+          padding: 1px 4px;
+          border-radius: 3px;
+          border: 1px solid #22c55e;
+          white-space: nowrap;
         }
-        .leaflet-tooltip-top:before {
-          border-top-color: #22c55e !important;
+        .device-popup {
+          font-size: 12px;
+          line-height: 1.4;
+        }
+        .cluster-marker {
+          transition: transform 0.2s;
+        }
+        .cluster-marker:hover {
+          transform: scale(1.1);
+        }
+        .leaflet-marker-icon {
+          cursor: pointer;
         }
       `}</style>
     </div>

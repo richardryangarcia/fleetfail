@@ -1,5 +1,7 @@
 import { Orchestrator, type FleetMetrics, type FleetEvent, type Device, type Command, type Dispatch } from '@fleetfail/engine';
 
+const DEFAULT_DEVICE_COUNT = 20000;
+
 let orchestrator: Orchestrator | null = null;
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 let isRunning = false;
@@ -13,12 +15,12 @@ export function getOrchestrator(): Orchestrator {
       commandExpiryMs: 30000,
       tickIntervalMs: 500,
     });
-    orchestrator.seedFleet(75, Date.now());
+    orchestrator.seedFleet(DEFAULT_DEVICE_COUNT, Date.now());
   }
   return orchestrator;
 }
 
-export function resetOrchestrator(seed?: number, deviceCount: number = 75): void {
+export function resetOrchestrator(seed?: number, deviceCount: number = DEFAULT_DEVICE_COUNT): void {
   stopSimulation();
   orchestrator = new Orchestrator({
     seed: seed ?? Date.now(),

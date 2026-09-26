@@ -2,6 +2,8 @@
 export type {
   Device,
   DeviceStatus,
+  DeviceGeneration,
+  DeviceRegion,
   Command,
   CommandStatus,
   Dispatch,
@@ -74,14 +76,17 @@ export { Orchestrator, type OrchestratorState, type DeliveryResult } from './orc
 // Database persistence
 export { FleetDb, type DbConfig } from './db.js';
 
-// ERCOT zone fixtures (synthetic)
+// ERCOT zone fixtures (synthetic) + IL zones
 export {
   ERCOT_ZONES,
+  IL_ZONES,
+  ALL_ZONES,
   getZoneById,
   getTotalGridLoad,
   getTotalRenewableGeneration,
   getGridStatus,
   type ErcotZone,
+  type GridZone,
   type GridStatus,
   type ZoneBounds,
 } from './ercot.js';
@@ -97,6 +102,15 @@ export {
   type ErcotGridSummary,
   type ErcotCacheData,
 } from './ercot-cache.js';
+
+// ERCOT real fixture data (documented source)
+export {
+  ERCOT_REAL_FIXTURE,
+  IL_REAL_FIXTURE,
+  COMBINED_REAL_FIXTURE,
+  getErcotRealFixture,
+  getCombinedRealFixture,
+} from './ercot-fixture.js';
 
 // Zone-preference allocator
 export {

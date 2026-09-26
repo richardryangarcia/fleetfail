@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { Command, Dispatch, FleetEvent, Device } from './types.js';
+import type { Command, Dispatch, FleetEvent, Device, DeviceRegion, DeviceGeneration } from './types.js';
 
 export interface DbConfig {
   path: string;
@@ -34,7 +34,9 @@ export class FleetDb {
         zone TEXT NOT NULL,
         latitude REAL NOT NULL DEFAULT 31.0,
         longitude REAL NOT NULL DEFAULT -99.0,
-        current_setpoint_kw REAL NOT NULL DEFAULT 0
+        current_setpoint_kw REAL NOT NULL DEFAULT 0,
+        region TEXT NOT NULL DEFAULT 'TX',
+        generation TEXT NOT NULL DEFAULT 'gen1'
       );
 
       CREATE TABLE IF NOT EXISTS commands (
@@ -90,8 +92,8 @@ export class FleetDb {
       INSERT OR REPLACE INTO devices (
         id, name, max_power_kw, capacity_kwh, soc_percent, reserve_percent,
         status, last_telemetry_at, epoch, last_sequence, processed_keys, zone,
-        latitude, longitude, current_setpoint_kw
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        latitude, longitude, current_setpoint_kw, region, generation
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     stmt.run(
@@ -109,7 +111,9 @@ export class FleetDb {
       device.zone,
       device.latitude,
       device.longitude,
-      device.currentSetpointKw
+      device.currentSetpointKw,
+      device.region,
+      device.generation
     );
   }
 
@@ -118,8 +122,8 @@ export class FleetDb {
       INSERT OR REPLACE INTO devices (
         id, name, max_power_kw, capacity_kwh, soc_percent, reserve_percent,
         status, last_telemetry_at, epoch, last_sequence, processed_keys, zone,
-        latitude, longitude, current_setpoint_kw
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        latitude, longitude, current_setpoint_kw, region, generation
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     const insert = this.db.transaction((devices: Device[]) => {
@@ -139,7 +143,9 @@ export class FleetDb {
           device.zone,
           device.latitude,
           device.longitude,
-          device.currentSetpointKw
+          device.currentSetpointKw,
+          device.region,
+          device.generation
         );
       }
     });
@@ -164,6 +170,8 @@ export class FleetDb {
       latitude: number;
       longitude: number;
       current_setpoint_kw: number;
+      region: string;
+      generation: string;
     }>;
     
     return rows.map(row => ({
@@ -182,6 +190,8 @@ export class FleetDb {
       latitude: row.latitude,
       longitude: row.longitude,
       currentSetpointKw: row.current_setpoint_kw,
+      region: row.region as DeviceRegion,
+      generation: row.generation as DeviceGeneration,
     }));
   }
 

@@ -1,13 +1,6 @@
-import { v4 as uuid } from 'uuid';
-import type { Device, DeviceStatus } from './types.js';
+import type { Device, DeviceStatus, DeviceGeneration, DeviceRegion } from './types.js';
 import { SeededRandom } from './random.js';
-import { ERCOT_ZONES } from './ercot.js';
-
-const DEVICE_NAMES = [
-  'Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta',
-  'Iota', 'Kappa', 'Lambda', 'Mu', 'Nu', 'Xi', 'Omicron', 'Pi', 'Rho',
-  'Sigma', 'Tau', 'Upsilon', 'Phi', 'Chi', 'Psi', 'Omega'
-];
+import { ALL_ZONES, type GridZone } from './ercot.js';
 
 export interface DeviceSpec {
   maxPowerKw: number;
@@ -15,12 +8,19 @@ export interface DeviceSpec {
   socPercent: number;
   reservePercent: number;
   zone: string;
+  region: DeviceRegion;
+  generation: DeviceGeneration;
   latitude: number;
   longitude: number;
 }
 
+const GEN_SPECS: Record<DeviceGeneration, { maxPowerKw: number; capacityKwh: number }> = {
+  gen1: { maxPowerKw: 25, capacityKwh: 50 },
+  gen3: { maxPowerKw: 40, capacityKwh: 80 },
+};
+
 /**
- * Simple Gulf of Mexico water check.
+ * Simple Gulf of Mexico water check for TX zones.
  * Returns true if point is likely in water (should be rejected).
  */
 function isInGulf(lat: number, lng: number): boolean {
@@ -34,25 +34,19 @@ function isInGulf(lat: number, lng: number): boolean {
 
 /**
  * Generate lat/lng within zone bounds using rejection sampling.
- * Ensures all points are on land (not in Gulf of Mexico).
  */
 function generateZonePosition(
-  zone: string,
+  zoneData: GridZone,
   rng: SeededRandom
 ): { latitude: number; longitude: number } {
-  const zoneData = ERCOT_ZONES.find(z => z.id === zone);
-  if (!zoneData) {
-    return { latitude: 31.0, longitude: -99.0 };
-  }
-  
-  const { bounds } = zoneData;
+  const { bounds, region } = zoneData;
   const maxAttempts = 20;
   
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const latitude = bounds.minLat + rng.next() * (bounds.maxLat - bounds.minLat);
     const longitude = bounds.minLng + rng.next() * (bounds.maxLng - bounds.minLng);
     
-    if (!isInGulf(latitude, longitude)) {
+    if (region === 'IL' || !isInGulf(latitude, longitude)) {
       return { latitude, longitude };
     }
   }
@@ -62,24 +56,33 @@ function generateZonePosition(
 }
 
 export function createDevice(
-  spec: Partial<DeviceSpec> = {},
+  spec: Partial<DeviceSpec>,
   rng: SeededRandom,
   now: number,
-  nameIndex: number
+  deviceIndex: number
 ): Device {
-  const nameSuffix = Math.floor(nameIndex / DEVICE_NAMES.length) || '';
-  const baseName = DEVICE_NAMES[nameIndex % DEVICE_NAMES.length]!;
+  const zone = spec.zone ?? rng.pick(ALL_ZONES)!;
+  const zoneData = typeof zone === 'string' ? ALL_ZONES.find(z => z.id === zone) : zone;
   
-  const zone = spec.zone ?? rng.pick(ERCOT_ZONES.map(z => z.id))!;
+  if (!zoneData) {
+    throw new Error(`Unknown zone: ${zone}`);
+  }
+
+  const region = spec.region ?? zoneData.region;
+  const generation = spec.generation ?? (rng.chance(0.6) ? 'gen1' : 'gen3');
+  const genSpec = GEN_SPECS[generation];
+  
   const position = spec.latitude !== undefined && spec.longitude !== undefined
     ? { latitude: spec.latitude, longitude: spec.longitude }
-    : generateZonePosition(zone, rng);
+    : generateZonePosition(zoneData, rng);
+  
+  const id = `dev-${deviceIndex.toString(36).padStart(5, '0')}`;
   
   return {
-    id: uuid(),
-    name: `${baseName}${nameSuffix}-${rng.int(100, 999)}`,
-    maxPowerKw: spec.maxPowerKw ?? rng.float(5, 15),
-    capacityKwh: spec.capacityKwh ?? rng.float(10, 30),
+    id,
+    name: `${region}-${generation.toUpperCase()}-${deviceIndex}`,
+    maxPowerKw: spec.maxPowerKw ?? genSpec.maxPowerKw,
+    capacityKwh: spec.capacityKwh ?? genSpec.capacityKwh,
     socPercent: spec.socPercent ?? rng.float(40, 95),
     reservePercent: spec.reservePercent ?? 20,
     status: 'online',
@@ -87,23 +90,43 @@ export function createDevice(
     epoch: 1,
     lastSequence: 0,
     processedKeys: new Set(),
-    zone,
+    zone: zoneData.id,
+    region,
+    generation,
     latitude: position.latitude,
     longitude: position.longitude,
     currentSetpointKw: 0,
   };
 }
 
+export interface FleetConfig {
+  count: number;
+  seed: number;
+  now: number;
+  txRatio?: number;
+}
+
+/**
+ * Seed a large fleet efficiently with TX + IL distribution.
+ * Default 70% TX, 30% IL to match ERCOT focus.
+ */
 export function seedFleet(
   count: number,
   seed: number,
-  now: number
+  now: number,
+  txRatio: number = 0.7
 ): Device[] {
   const rng = new SeededRandom(seed);
   const devices: Device[] = [];
   
+  const txZones = ALL_ZONES.filter(z => z.region === 'TX');
+  const ilZones = ALL_ZONES.filter(z => z.region === 'IL');
+  
   for (let i = 0; i < count; i++) {
-    devices.push(createDevice({}, rng, now, i));
+    const isTx = rng.next() < txRatio;
+    const zone = isTx ? rng.pick(txZones)! : rng.pick(ilZones)!;
+    
+    devices.push(createDevice({ zone: zone.id, region: zone.region }, rng, now, i));
   }
   
   return devices;

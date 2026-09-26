@@ -11,6 +11,10 @@
 
 export type DeviceStatus = 'online' | 'offline' | 'reconnecting';
 
+export type DeviceGeneration = 'gen1' | 'gen3';
+
+export type DeviceRegion = 'TX' | 'IL';
+
 export interface Device {
   id: string;
   name: string;
@@ -34,6 +38,10 @@ export interface Device {
   processedKeys: Set<string>;
   /** Zone identifier for geographic allocation */
   zone: string;
+  /** Region: TX (ERCOT) or IL */
+  region: DeviceRegion;
+  /** Device generation: gen1 (25kW) or gen3 (40kW) */
+  generation: DeviceGeneration;
   /** Latitude for map display (synthetic, not real install location) */
   latitude: number;
   /** Longitude for map display (synthetic, not real install location) */
