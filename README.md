@@ -27,11 +27,22 @@ The `/map` page displays **~20,000 synthetic battery devices** across Texas (ERC
 
 ### Grid Data Sources
 
-**ERCOT Fixture (Real Cached Data)**
+**ERCOT Live API (when credentials configured)**
+- **Source:** ERCOT Public API (https://api.ercot.com/api/public-reports)
+- **Auth:** OAuth2 ROPC flow via Azure B2C
+- **Endpoints:**
+  - `/np6-345-cd/act_sys_load_by_wzn` — Actual load by weather zone
+  - `/np3-565-cd/lf_by_model_weather_zone` — Load forecast by weather zone
+  - `/np4-742-cd/wpp_hrly_actual_fcast_geo` — Wind actual/forecast
+  - `/np4-745-cd/spp_hrly_actual_fcast_geo` — Solar actual/forecast
+- **Label:** "Cached / Replay (Live ERCOT <timestamp>)"
+- **Caching:** 5-minute server-side TTL
+
+**ERCOT Fixture (fallback when credentials not configured or API fails)**
 - **Source:** ERCOT Grid Operations Dashboard (https://www.ercot.com/gridmktinfo/dashboards)
 - **Capture:** September 2024 snapshot, afternoon peak period
 - **Data:** Weather-zone load, wind/solar generation, temperature, net load
-- **Label:** "Cached / Replay (ERCOT Sep 2024)"
+- **Label:** "Cached / Replay (Fixture Sep 2024)"
 
 **Illinois Zones (Synthetic)**
 - **Structure:** Based on MISO Zone 4/6 geography
@@ -193,6 +204,25 @@ pnpm test
 - ❌ Bill Stress Callouts
 
 ## Configuration
+
+### Environment Variables
+
+Copy `.env.example` to `.env.local` and configure for live ERCOT data:
+
+```bash
+cp .env.example .env.local
+```
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `ERCOT_API_USERNAME` | ERCOT B2C account email | For live data |
+| `ERCOT_API_PASSWORD` | ERCOT B2C account password | For live data |
+| `ERCOT_PUBLIC_API_SUBSCRIPTION_KEY` | Azure APIM subscription key | For live data |
+
+**Without credentials:** System uses fixture data (Sep 2024 snapshot) — fully functional.  
+**With credentials:** System fetches live ERCOT grid data with 5-minute cache TTL.
+
+### Orchestrator Config
 
 Default orchestrator config (`packages/engine/src/types.ts`):
 
