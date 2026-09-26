@@ -113,6 +113,7 @@ export default function MapPage() {
           devices={state.devices}
           events={state.events}
           ercotData={ercotData}
+          dispatch={state.activeDispatch}
           onDeviceClick={handleDeviceClick}
           onZoneClick={handleMassOutage}
         />

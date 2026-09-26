@@ -20,8 +20,21 @@ export interface DeviceSpec {
 }
 
 /**
- * Generate lat/lng clustered around zone centroid.
- * Uses Gaussian-like distribution for realistic clustering.
+ * Simple Gulf of Mexico water check.
+ * Returns true if point is likely in water (should be rejected).
+ */
+function isInGulf(lat: number, lng: number): boolean {
+  if (lng > -94.0) return true;
+  if (lat < 26.0) return true;
+  if (lat < 27.5 && lng > -97.0) return true;
+  if (lat < 28.5 && lng > -96.0) return true;
+  if (lat < 29.5 && lng > -95.0) return true;
+  return false;
+}
+
+/**
+ * Generate lat/lng within zone bounds using rejection sampling.
+ * Ensures all points are on land (not in Gulf of Mexico).
  */
 function generateZonePosition(
   zone: string,
@@ -32,19 +45,20 @@ function generateZonePosition(
     return { latitude: 31.0, longitude: -99.0 };
   }
   
-  const [lat, lng] = zoneData.centroid;
-  const spreadLat = 0.8;
-  const spreadLng = 1.2;
+  const { bounds } = zoneData;
+  const maxAttempts = 20;
   
-  const u1 = rng.next();
-  const u2 = rng.next();
-  const gaussLat = Math.sqrt(-2 * Math.log(u1 + 0.001)) * Math.cos(2 * Math.PI * u2);
-  const gaussLng = Math.sqrt(-2 * Math.log(u1 + 0.001)) * Math.sin(2 * Math.PI * u2);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const latitude = bounds.minLat + rng.next() * (bounds.maxLat - bounds.minLat);
+    const longitude = bounds.minLng + rng.next() * (bounds.maxLng - bounds.minLng);
+    
+    if (!isInGulf(latitude, longitude)) {
+      return { latitude, longitude };
+    }
+  }
   
-  return {
-    latitude: lat + gaussLat * spreadLat,
-    longitude: lng + gaussLng * spreadLng,
-  };
+  const [centroidLat, centroidLng] = zoneData.centroid;
+  return { latitude: centroidLat, longitude: centroidLng };
 }
 
 export function createDevice(
