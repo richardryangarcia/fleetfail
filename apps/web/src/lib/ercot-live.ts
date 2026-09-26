@@ -256,11 +256,62 @@ async function executeWithRetry<T>(
   throw lastError;
 }
 
+interface ErcotApiFieldDef {
+  name: string;
+  label?: string;
+  dataType?: string;
+  searchable?: boolean;
+  sortable?: boolean;
+  hasRange?: boolean;
+}
+
 interface ErcotApiResponse<T> {
-  data: T[];
+  fields?: ErcotApiFieldDef[];
+  data: T[] | unknown[][];
   meta?: {
     totalRecords?: number;
   };
+}
+
+/**
+ * Transform ERCOT API response from positional arrays to named objects.
+ * 
+ * ERCOT API returns data in two formats:
+ * 1. Legacy: { data: [{ field: value }, ...] } - array of objects
+ * 2. Current: { fields: [...], data: [[val1, val2], ...] } - positional arrays
+ * 
+ * This function handles both formats and normalizes field names to camelCase.
+ */
+function transformErcotResponse<T>(
+  response: ErcotApiResponse<T>
+): T[] {
+  const { fields, data } = response;
+  
+  if (!data || !Array.isArray(data) || data.length === 0) {
+    return [];
+  }
+  
+  const firstRow = data[0];
+  
+  if (fields && Array.isArray(fields) && fields.length > 0 && Array.isArray(firstRow)) {
+    const fieldNames = fields.map(f => f.name);
+    return (data as unknown[][]).map(row => {
+      const obj: Record<string, unknown> = {};
+      fieldNames.forEach((name, idx) => {
+        if (idx < row.length) {
+          obj[name] = row[idx];
+        }
+      });
+      return obj as T;
+    });
+  }
+  
+  if (typeof firstRow === 'object' && firstRow !== null && !Array.isArray(firstRow)) {
+    return data as T[];
+  }
+  
+  console.warn('ERCOT API response format not recognized, returning empty array');
+  return [];
 }
 
 // ============================================================================
@@ -272,71 +323,92 @@ interface ErcotApiResponse<T> {
 // ============================================================================
 
 interface HasDeliveryDateHour {
-  deliveryDate: string;
-  hourEnding: string;
+  deliveryDate?: string;
+  hourEnding?: string;
+}
+
+/**
+ * Null-safe string comparison for sorting.
+ * Treats undefined/null as empty string (sorts first in desc order).
+ */
+function safeCompareDesc(a: string | undefined | null, b: string | undefined | null): number {
+  const aStr = a ?? '';
+  const bStr = b ?? '';
+  return bStr.localeCompare(aStr);
+}
+
+/**
+ * Null-safe integer parsing for sorting.
+ * Returns 0 for undefined/null/NaN values.
+ */
+function safeParseInt(value: string | number | undefined | null): number {
+  if (value == null) return 0;
+  const str = typeof value === 'number' ? String(value) : value;
+  const parsed = parseInt(str.replace(':00', '').trim(), 10);
+  return isNaN(parsed) ? 0 : parsed;
 }
 
 function sortByDeliveryDateHourDesc<T extends HasDeliveryDateHour>(data: T[]): T[] {
   return [...data].sort((a, b) => {
-    const dateCompare = b.deliveryDate.localeCompare(a.deliveryDate);
+    const dateCompare = safeCompareDesc(a?.deliveryDate, b?.deliveryDate);
     if (dateCompare !== 0) return dateCompare;
-    const hourA = parseInt(a.hourEnding.replace(':00', '').trim(), 10);
-    const hourB = parseInt(b.hourEnding.replace(':00', '').trim(), 10);
+    const hourA = safeParseInt(a?.hourEnding);
+    const hourB = safeParseInt(b?.hourEnding);
     return hourB - hourA;
   });
 }
 
 interface HasDeliveryDateHourInterval {
-  deliveryDate: string;
-  deliveryHour: string;
-  deliveryInterval: string;
+  deliveryDate?: string;
+  deliveryHour?: string | number;
+  deliveryInterval?: string | number;
 }
 
 function sortByDeliveryDateHourIntervalDesc<T extends HasDeliveryDateHourInterval>(data: T[]): T[] {
   return [...data].sort((a, b) => {
-    const dateCompare = b.deliveryDate.localeCompare(a.deliveryDate);
+    const dateCompare = safeCompareDesc(a?.deliveryDate, b?.deliveryDate);
     if (dateCompare !== 0) return dateCompare;
-    const hourA = parseInt(a.deliveryHour, 10);
-    const hourB = parseInt(b.deliveryHour, 10);
+    const hourA = safeParseInt(a?.deliveryHour);
+    const hourB = safeParseInt(b?.deliveryHour);
     if (hourB !== hourA) return hourB - hourA;
-    const intervalA = parseInt(a.deliveryInterval, 10);
-    const intervalB = parseInt(b.deliveryInterval, 10);
+    const intervalA = safeParseInt(a?.deliveryInterval);
+    const intervalB = safeParseInt(b?.deliveryInterval);
     return intervalB - intervalA;
   });
 }
 
 interface ActualLoadByZone {
-  deliveryDate: string;
-  hourEnding: string;
-  coast: number;
-  east: number;
-  farWest: number;
-  north: number;
-  northCentral: number;
-  southCentral: number;
-  southern: number;
-  west: number;
-  systemTotal: number;
+  deliveryDate?: string;
+  hourEnding?: string;
+  coast?: number;
+  east?: number;
+  farWest?: number;
+  north?: number;
+  northCentral?: number;
+  southCentral?: number;
+  southern?: number;
+  west?: number;
+  systemTotal?: number;
 }
 
 interface LoadForecastByZone {
-  deliveryDate: string;
-  hourEnding: string;
-  model: string;
-  coast: number;
-  east: number;
-  farWest: number;
-  north: number;
-  northCentral: number;
-  southCentral: number;
-  southern: number;
-  west: number;
-  systemTotal: number;
+  deliveryDate?: string;
+  hourEnding?: string;
+  model?: string;
+  coast?: number;
+  east?: number;
+  farWest?: number;
+  north?: number;
+  northCentral?: number;
+  southCentral?: number;
+  southern?: number;
+  west?: number;
+  systemTotal?: number;
 }
 
 interface WindActualForecast {
-  deliveryDate: string;
-  hourEnding: string;
+  deliveryDate?: string;
+  hourEnding?: string;
   actual?: number;
   stppf?: number;
   wgrpp?: number;
@@ -346,8 +418,8 @@ interface WindActualForecast {
 }
 
 interface SolarActualForecast {
-  deliveryDate: string;
-  hourEnding: string;
+  deliveryDate?: string;
+  hourEnding?: string;
   actual?: number;
   stppf?: number;
   copHsl?: number;
@@ -365,7 +437,7 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
     },
   });
   
-  const data = response.data.data || [];
+  const data = transformErcotResponse<ActualLoadByZone>(response.data);
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -379,7 +451,7 @@ export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZo
     },
   });
   
-  const data = response.data.data || [];
+  const data = transformErcotResponse<LoadForecastByZone>(response.data);
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -393,7 +465,7 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
     },
   });
   
-  const data = response.data.data || [];
+  const data = transformErcotResponse<WindActualForecast>(response.data);
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -414,8 +486,9 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
         },
       });
       
-      if (response.data.data && response.data.data.length > 0) {
-        return sortByDeliveryDateHourDesc(response.data.data);
+      const data = transformErcotResponse<SolarActualForecast>(response.data);
+      if (data.length > 0) {
+        return sortByDeliveryDateHourDesc(data);
       }
     } catch (err: unknown) {
       const axiosErr = err as AxiosError;
@@ -482,22 +555,24 @@ function distributeRenewableToZones(
 
 function getLoadValue(load: ActualLoadByZone | LoadForecastByZone, key: string): number {
   switch (key) {
-    case 'coast': return load.coast;
-    case 'east': return load.east;
-    case 'farWest': return load.farWest;
-    case 'north': return load.north;
-    case 'northCentral': return load.northCentral;
-    case 'southCentral': return load.southCentral;
-    case 'southern': return load.southern;
-    case 'west': return load.west;
+    case 'coast': return load.coast ?? 0;
+    case 'east': return load.east ?? 0;
+    case 'farWest': return load.farWest ?? 0;
+    case 'north': return load.north ?? 0;
+    case 'northCentral': return load.northCentral ?? 0;
+    case 'southCentral': return load.southCentral ?? 0;
+    case 'southern': return load.southern ?? 0;
+    case 'west': return load.west ?? 0;
     default: return 0;
   }
 }
 
-function parseHourKey(deliveryDate: string, hourEnding: string): { hourKey: string; hourEndingNum: number } {
-  const hourEndingNum = parseInt(hourEnding.replace(':00', '').trim(), 10);
+function parseHourKey(deliveryDate: string | undefined, hourEnding: string | undefined): { hourKey: string; hourEndingNum: number } {
+  const date = deliveryDate ?? new Date().toISOString().split('T')[0];
+  const hourStr = hourEnding ?? '0';
+  const hourEndingNum = safeParseInt(hourStr);
   const displayHour = hourEndingNum === 24 ? 0 : hourEndingNum;
-  const hourKey = `${deliveryDate} ${String(displayHour).padStart(2, '0')}:00`;
+  const hourKey = `${date} ${String(displayHour).padStart(2, '0')}:00`;
   return { hourKey, hourEndingNum };
 }
 
@@ -709,6 +784,7 @@ function buildErcotCacheData(
   const processedHours = new Set<string>();
   
   for (const load of actualLoad) {
+    if (!load.deliveryDate) continue;
     const { hourKey, hourEndingNum } = parseHourKey(load.deliveryDate, load.hourEnding);
     if (processedHours.has(hourKey)) continue;
     processedHours.add(hourKey);
@@ -725,6 +801,7 @@ function buildErcotCacheData(
   }
   
   for (const forecast of loadForecast) {
+    if (!forecast.deliveryDate) continue;
     const { hourKey, hourEndingNum } = parseHourKey(forecast.deliveryDate, forecast.hourEnding);
     if (processedHours.has(hourKey)) continue;
     processedHours.add(hourKey);
@@ -819,20 +896,20 @@ import type { SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
 import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
 
 interface RtSppApiRecord {
-  deliveryDate: string;
-  deliveryHour: string;
-  deliveryInterval: string;
-  settlementPoint: string;
-  settlementPointPrice: number;
-  repeatHourFlag: string;
+  deliveryDate?: string;
+  deliveryHour?: string | number;
+  deliveryInterval?: string | number;
+  settlementPoint?: string;
+  settlementPointPrice?: number;
+  repeatHourFlag?: string;
 }
 
 interface DamSppApiRecord {
-  deliveryDate: string;
-  hourEnding: string;
-  settlementPoint: string;
-  settlementPointPrice: number;
-  settlementPointType: string;
+  deliveryDate?: string;
+  hourEnding?: string;
+  settlementPoint?: string;
+  settlementPointPrice?: number;
+  settlementPointType?: string;
 }
 
 /**
@@ -857,22 +934,24 @@ export async function fetchSppRealTime(
     }
   );
   
-  const records = sortByDeliveryDateHourIntervalDesc(response.data.data || []);
+  const records = sortByDeliveryDateHourIntervalDesc(transformErcotResponse<RtSppApiRecord>(response.data));
   
-  return records.map((record) => {
-    const hour = parseInt(record.deliveryHour, 10);
-    const interval = parseInt(record.deliveryInterval, 10);
-    const displayHour = hour === 24 ? 0 : hour;
-    const minutes = (interval - 1) * 15;
-    
-    return {
-      settlementPoint: record.settlementPoint,
-      timestamp: `${record.deliveryDate}T${String(displayHour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00.000Z`,
-      priceMwh: record.settlementPointPrice,
-      hourEnding: hour,
-      deliveryDate: record.deliveryDate,
-    };
-  });
+  return records
+    .filter(record => record.deliveryDate && record.settlementPointPrice != null)
+    .map((record) => {
+      const hour = safeParseInt(record.deliveryHour);
+      const interval = safeParseInt(record.deliveryInterval) || 1;
+      const displayHour = hour === 24 ? 0 : hour;
+      const minutes = (interval - 1) * 15;
+      
+      return {
+        settlementPoint: record.settlementPoint ?? settlementPoint,
+        timestamp: `${record.deliveryDate}T${String(displayHour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00.000Z`,
+        priceMwh: record.settlementPointPrice!,
+        hourEnding: hour,
+        deliveryDate: record.deliveryDate!,
+      };
+    });
 }
 
 /**
@@ -897,20 +976,22 @@ export async function fetchSppDayAhead(
     }
   );
   
-  const records = sortByDeliveryDateHourDesc(response.data.data || []);
+  const records = sortByDeliveryDateHourDesc(transformErcotResponse<DamSppApiRecord>(response.data));
   
-  return records.map((record) => {
-    const hourEnding = parseInt(record.hourEnding.replace(':00', '').trim(), 10);
-    const displayHour = hourEnding === 24 ? 0 : hourEnding;
-    
-    return {
-      settlementPoint: record.settlementPoint,
-      timestamp: `${record.deliveryDate}T${String(displayHour).padStart(2, '0')}:00:00.000Z`,
-      priceMwh: record.settlementPointPrice,
-      hourEnding,
-      deliveryDate: record.deliveryDate,
-    };
-  });
+  return records
+    .filter(record => record.deliveryDate && record.settlementPointPrice != null)
+    .map((record) => {
+      const hourEnding = safeParseInt(record.hourEnding);
+      const displayHour = hourEnding === 24 ? 0 : hourEnding;
+      
+      return {
+        settlementPoint: record.settlementPoint ?? settlementPoint,
+        timestamp: `${record.deliveryDate}T${String(displayHour).padStart(2, '0')}:00:00.000Z`,
+        priceMwh: record.settlementPointPrice!,
+        hourEnding,
+        deliveryDate: record.deliveryDate!,
+      };
+    });
 }
 
 /**
