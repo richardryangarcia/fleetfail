@@ -67,6 +67,10 @@ export function markExpired(command: Command): Command {
   return { ...command, status: 'expired' };
 }
 
+export function markReallocated(command: Command): Command {
+  return { ...command, status: 'reallocated' };
+}
+
 export function isCommandExpired(command: Command, now: number): boolean {
   return now >= command.expiresAt;
 }

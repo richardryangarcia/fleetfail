@@ -39,6 +39,11 @@ export function startSimulation(): void {
   const orch = getOrchestrator();
   tickInterval = setInterval(() => {
     orch.tick();
+    
+    const dispatch = orch.getActiveDispatch();
+    if (dispatch && dispatch.status !== 'allocating' && dispatch.status !== 'executing') {
+      stopSimulation();
+    }
   }, 500);
 }
 

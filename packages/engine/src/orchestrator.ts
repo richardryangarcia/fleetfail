@@ -17,6 +17,7 @@ import {
   markDuplicateIgnored,
   markDeviceOffline,
   markExpired,
+  markReallocated,
   validateCommand,
   applyCommandToDevice,
   shouldRetry,
@@ -537,6 +538,9 @@ export class Orchestrator {
       
       if (!needsReallocation) continue;
       
+      const oldCommand = markReallocated(command);
+      this.state.commands.set(commandId, oldCommand);
+      
       excludeDevices.add(command.deviceId);
       
       const available = this.getDevices()
@@ -589,7 +593,12 @@ export class Orchestrator {
     
     const pendingCommands = dispatch.commandIds
       .map(id => this.state.commands.get(id))
-      .filter(c => c && (c.status === 'pending' || c.status === 'sent' || c.status === 'timeout'));
+      .filter(c => {
+        if (!c) return false;
+        if (c.status === 'pending' || c.status === 'sent') return true;
+        if (c.status === 'timeout' && c.attemptCount < this.config.maxRetries) return true;
+        return false;
+      });
     
     if (pendingCommands.length > 0) return false;
     
