@@ -12,6 +12,8 @@
 
 The `/map` page displays ~50-100 synthetic battery devices clustered by ERCOT weather zone. **These markers represent synthetic zone clusters, NOT real Base installations.** Device positions are deterministically seeded around zone centroids for demonstration purposes.
 
+**Basemap**: OpenStreetMap (no API key required).
+
 ---
 
 ## Overview
