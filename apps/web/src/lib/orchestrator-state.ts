@@ -13,12 +13,12 @@ export function getOrchestrator(): Orchestrator {
       commandExpiryMs: 30000,
       tickIntervalMs: 500,
     });
-    orchestrator.seedFleet(50, Date.now());
+    orchestrator.seedFleet(75, Date.now());
   }
   return orchestrator;
 }
 
-export function resetOrchestrator(seed?: number, deviceCount: number = 50): void {
+export function resetOrchestrator(seed?: number, deviceCount: number = 75): void {
   stopSimulation();
   orchestrator = new Orchestrator({
     seed: seed ?? Date.now(),

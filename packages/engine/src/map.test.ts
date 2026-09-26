@@ -271,6 +271,43 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
     });
   });
 
+  describe('Dispatch Convergence with Simulation', () => {
+    it('dispatch converges with delivered approaching target', () => {
+      const largeOrch = new Orchestrator({ seed: 42 });
+      largeOrch.seedFleet(75, 0);
+      
+      const metrics = largeOrch.getMetrics();
+      expect(metrics.availableCapacityKw).toBeGreaterThan(400);
+      
+      const dispatch = largeOrch.startDispatch(400);
+      expect(dispatch.status).toBe('executing');
+      expect(dispatch.allocatedKw).toBeGreaterThanOrEqual(399);
+      
+      largeOrch.runUntilComplete(50);
+      
+      const finalDispatch = largeOrch.getActiveDispatch()!;
+      expect(finalDispatch.status).toBe('converged');
+      expect(finalDispatch.deliveredKw).toBeGreaterThanOrEqual(399);
+      
+      const events = largeOrch.getEvents();
+      const eventTypes = new Set(events.map(e => e.type));
+      expect(eventTypes.has('DISPATCH_STARTED')).toBe(true);
+      expect(eventTypes.has('COMMAND_SENT')).toBe(true);
+      expect(eventTypes.has('COMMAND_ACKED')).toBe(true);
+      expect(eventTypes.has('DISPATCH_CONVERGED')).toBe(true);
+    });
+
+    it('75 devices provide sufficient capacity for 400kW dispatch', () => {
+      for (let seed = 1; seed <= 10; seed++) {
+        const testOrch = new Orchestrator({ seed });
+        testOrch.seedFleet(75, 0);
+        
+        const metrics = testOrch.getMetrics();
+        expect(metrics.availableCapacityKw).toBeGreaterThan(400);
+      }
+    });
+  });
+
   describe('Integration - Map Click → Reallocation Flow', () => {
     it('full flow: dispatch → click-offline → reallocation events', () => {
       orchestrator.startDispatch(200);
