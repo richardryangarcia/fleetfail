@@ -139,6 +139,13 @@ export function MapSideStrip({
                 style={{ width: `${Math.min(100, progressPct)}%` }}
               />
             </div>
+            {metrics.reallocations > 0 && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#1a2518] text-nc-ok border border-[#2a4528]">
+                  ↑ {metrics.reallocations} covering slack
+                </span>
+              </div>
+            )}
           </>
         ) : (
           <div className="text-nc-ink-dim text-[11px] font-mono">No active dispatch</div>

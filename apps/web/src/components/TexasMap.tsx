@@ -67,15 +67,23 @@ function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boo
   });
 }
 
-function createPopupContent(device: Device): string {
+function createPopupContent(device: Device, isReallocated: boolean = false): string {
+  const atMax = device.currentSetpointKw >= device.maxPowerKw - 0.1;
+  const reallocBadge = isReallocated 
+    ? `<div style="margin-top: 4px; padding: 2px 6px; background: #1a2518; border: 1px solid #2a4528; color: #3dba7a; font-size: 10px; font-weight: 600;">
+        ${atMax ? '↑ AT MAX — covering slack' : '↑ COVERING SLACK'}
+       </div>`
+    : '';
+  
   return `
     <div class="device-popup">
       <div style="font-weight: 600; color: #e8edf2;">${device.name}</div>
       <div style="color: #6b7380;">Region: ${device.region} | Zone: ${device.zone}</div>
-      <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW)</div>
+      <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW max)</div>
       <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
       <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
       ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
+      ${reallocBadge}
     </div>
   `;
 }
@@ -189,7 +197,7 @@ function ClusterLayer({
       if (existingMarker) {
         existingMarker.deviceData = device;
         existingMarker.setIcon(newIcon);
-        existingMarker.setPopupContent(createPopupContent(device));
+        existingMarker.setPopupContent(createPopupContent(device, isReallocated));
 
         existingMarker.off('click');
         if (device.status === 'online') {
@@ -200,7 +208,7 @@ function ClusterLayer({
       } else {
         const marker = L.marker([device.latitude, device.longitude], { icon: newIcon }) as DeviceMarker;
         marker.deviceData = device;
-        marker.bindPopup(createPopupContent(device));
+        marker.bindPopup(createPopupContent(device, isReallocated));
 
         if (device.status === 'online') {
           marker.on('click', () => {
