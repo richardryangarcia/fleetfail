@@ -62,12 +62,6 @@ open http://localhost:43210
 
 ## Environment Variables
 
-Copy `.env.example` to `.env.local` for local development:
-
-```bash
-cp .env.example .env.local
-```
-
 ### ERCOT API Credentials (Server-Only)
 
 | Variable | Description |
@@ -80,6 +74,21 @@ cp .env.example .env.local
 **With credentials:** System fetches live ERCOT grid data.
 
 > **Important:** These are server-only variables. Do NOT prefix with `NEXT_PUBLIC_`.
+
+### Local Development Setup
+
+For local `pnpm dev`, place env vars in **`apps/web/.env.local`**:
+
+```bash
+cp .env.example apps/web/.env.local
+# Then edit apps/web/.env.local with your credentials
+```
+
+> **⚠️ Common Mistake:** The Next.js app only reads env vars from `apps/web/.env.local`. Placing credentials in `packages/engine/.env.local` or the repo root alone will **not** work — the web app won't see them.
+
+After adding or changing env vars, **restart `pnpm dev`**.
+
+**Grid Status Badge:** The Grid panel shows "LIVE" only when credentials are present **AND** the ERCOT fetch succeeds. Otherwise it displays "Cached / Replay" with the data source.
 
 ---
 
