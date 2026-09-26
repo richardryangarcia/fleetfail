@@ -139,3 +139,6 @@ export {
   type ArbEdge,
   type PriceCacheData,
 } from './ercot-prices.js';
+
+// ERCOT API utilities
+export { encodeErcotSort } from './ercot-api-utils.js';
