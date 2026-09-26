@@ -356,59 +356,61 @@ export default function Home() {
                 </span>
               )}
             </div>
-            {priceData && priceData.currentPriceMwh !== null ? (
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
-                  <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
-                    ${priceData.currentPriceMwh.toFixed(2)}
-                    <span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
-                    Charge Window <span className="text-nc-ok">(buy low)</span>
-                  </div>
-                  {priceData.arbEdge.chargeWindow ? (
-                    <div className="font-mono text-sm text-nc-ink">
-                      <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
-                      <span className="text-nc-ink-dim text-[10px] ml-1">
-                        @{priceData.arbEdge.chargeWindow.hourEnding}:00
-                      </span>
-                    </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
+                <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
+                  {priceData && priceData.currentPriceMwh !== null ? (
+                    <>${priceData.currentPriceMwh.toFixed(2)}<span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span></>
                   ) : (
-                    <div className="font-mono text-sm text-nc-ink-dim">—</div>
-                  )}
-                </div>
-                <div>
-                  <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
-                    Discharge Window <span className="text-nc-accent">(sell high)</span>
-                  </div>
-                  {priceData.arbEdge.dischargeWindow ? (
-                    <div className="font-mono text-sm text-nc-ink">
-                      <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
-                      <span className="text-nc-ink-dim text-[10px] ml-1">
-                        @{priceData.arbEdge.dischargeWindow.hourEnding}:00
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                    <span className="text-nc-ink-dim">—</span>
                   )}
                 </div>
               </div>
-            ) : (
-              <div className="text-nc-ink-dim text-[11px] font-mono">
-                Price data unavailable — configure ERCOT credentials for live SPP
+              <div>
+                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                  Charge Window <span className="text-nc-ok">(buy low)</span>
+                </div>
+                {priceData?.arbEdge?.chargeWindow ? (
+                  <div className="font-mono text-sm text-nc-ink">
+                    <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
+                    <span className="text-nc-ink-dim text-[10px] ml-1">
+                      @{priceData.arbEdge.chargeWindow.hourEnding}:00
+                    </span>
+                  </div>
+                ) : (
+                  <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                )}
               </div>
-            )}
-            {priceData && priceData.arbEdge && !priceData.arbEdge.hasEdge && priceData.currentPriceMwh !== null && (
+              <div>
+                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                  Discharge Window <span className="text-nc-accent">(sell high)</span>
+                </div>
+                {priceData?.arbEdge?.dischargeWindow ? (
+                  <div className="font-mono text-sm text-nc-ink">
+                    <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
+                    <span className="text-nc-ink-dim text-[10px] ml-1">
+                      @{priceData.arbEdge.dischargeWindow.hourEnding}:00
+                    </span>
+                  </div>
+                ) : (
+                  <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                )}
+              </div>
+            </div>
+            {priceData?.currentPriceMwh !== null && priceData?.arbEdge && !priceData.arbEdge.hasEdge && (
               <div className="mt-2 text-[10px] font-mono text-nc-warn">
                 No arb edge — spread below $5/MWh threshold
               </div>
             )}
-            {priceData && priceData.arbEdge?.hasEdge && (
+            {priceData?.arbEdge?.hasEdge && (
               <div className="mt-2 text-[10px] font-mono text-nc-ok">
                 ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread available
+              </div>
+            )}
+            {priceData?.currentPriceMwh === null && (
+              <div className="mt-2 text-[10px] font-mono text-nc-ink-dim">
+                Price data unavailable
               </div>
             )}
           </div>
