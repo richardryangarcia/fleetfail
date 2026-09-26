@@ -706,3 +706,172 @@ describe('Database Persistence', () => {
     db.close();
   });
 });
+
+describe('Durable processedKeys - Idempotency Survives Restart', () => {
+  it('processedKeys survive save/load cycle via Orchestrator.saveToDb/loadFromDb', async () => {
+    const { FleetDb } = await import('./db.js');
+    
+    const db = new FleetDb({ path: ':memory:', inMemory: true });
+    
+    const orch1 = new Orchestrator({ seed: 42 });
+    orch1.seedFleet(10, 0);
+    orch1.startDispatch(50);
+    orch1.runUntilComplete(30);
+    
+    const commands = orch1.getCommands();
+    const ackedCommand = commands.find(c => c.status === 'acked');
+    expect(ackedCommand).toBeDefined();
+    
+    const deviceBeforeSave = orch1.getDevice(ackedCommand!.deviceId)!;
+    expect(deviceBeforeSave.processedKeys.has(ackedCommand!.idempotencyKey)).toBe(true);
+    
+    orch1.saveToDb(db);
+    
+    const orch2 = new Orchestrator({ seed: 42 });
+    orch2.loadFromDb(db);
+    
+    const deviceAfterLoad = orch2.getDevice(ackedCommand!.deviceId)!;
+    expect(deviceAfterLoad.processedKeys.has(ackedCommand!.idempotencyKey)).toBe(true);
+    
+    const result = orch2.simulateDelivery(ackedCommand!.id);
+    expect(result.duplicate).toBe(true);
+    expect(result.delivered).toBe(false);
+    
+    db.close();
+  });
+
+  it('duplicate command is rejected after simulated restart', async () => {
+    const { FleetDb } = await import('./db.js');
+    
+    const db = new FleetDb({ path: ':memory:', inMemory: true });
+    
+    const orch1 = new Orchestrator({ seed: 123 });
+    orch1.seedFleet(5, 0);
+    orch1.startDispatch(20);
+    orch1.runUntilComplete(20);
+    
+    const commands = orch1.getCommands();
+    const ackedCommand = commands.find(c => c.status === 'acked');
+    expect(ackedCommand).toBeDefined();
+    
+    const idempotencyKey = ackedCommand!.idempotencyKey;
+    
+    orch1.saveToDb(db);
+    
+    const orch2 = new Orchestrator({ seed: 999 });
+    orch2.loadFromDb(db);
+    
+    const loadedDevice = orch2.getDevice(ackedCommand!.deviceId)!;
+    expect(loadedDevice.processedKeys.size).toBeGreaterThan(0);
+    expect(loadedDevice.processedKeys.has(idempotencyKey)).toBe(true);
+    
+    const duplicateResult = orch2.simulateDelivery(ackedCommand!.id);
+    expect(duplicateResult.duplicate).toBe(true);
+    expect(duplicateResult.delivered).toBe(false);
+    
+    const events = orch2.getEvents();
+    const duplicateEvents = events.filter(
+      e => e.type === 'DUPLICATE_IGNORED' && e.commandId === ackedCommand!.id
+    );
+    expect(duplicateEvents.length).toBeGreaterThanOrEqual(1);
+    
+    db.close();
+  });
+
+  it('processedKeys persist across multiple save/load cycles', async () => {
+    const { FleetDb } = await import('./db.js');
+    
+    const db = new FleetDb({ path: ':memory:', inMemory: true });
+    
+    const orch1 = new Orchestrator({ seed: 42 });
+    orch1.seedFleet(3, 0);
+    orch1.startDispatch(10);
+    orch1.runUntilComplete(20);
+    orch1.saveToDb(db);
+    
+    const firstAcked = orch1.getCommands().find(c => c.status === 'acked');
+    expect(firstAcked).toBeDefined();
+    
+    const orch2 = new Orchestrator({ seed: 42 });
+    orch2.loadFromDb(db);
+    
+    orch2.setTime(orch2.getCurrentTime() + 10000);
+    
+    const orch2Device = orch2.getDevice(firstAcked!.deviceId)!;
+    expect(orch2Device.processedKeys.has(firstAcked!.idempotencyKey)).toBe(true);
+    
+    orch2.saveToDb(db);
+    
+    const orch3 = new Orchestrator({ seed: 42 });
+    orch3.loadFromDb(db);
+    
+    const orch3Device = orch3.getDevice(firstAcked!.deviceId)!;
+    expect(orch3Device.processedKeys.has(firstAcked!.idempotencyKey)).toBe(true);
+    
+    const duplicateResult = orch3.simulateDelivery(firstAcked!.id);
+    expect(duplicateResult.duplicate).toBe(true);
+    
+    db.close();
+  });
+
+  it('no double effect on kW delivered after restart', async () => {
+    const { FleetDb } = await import('./db.js');
+    
+    const db = new FleetDb({ path: ':memory:', inMemory: true });
+    
+    const orch1 = new Orchestrator({ seed: 42 });
+    orch1.seedFleet(5, 0);
+    orch1.startDispatch(30);
+    orch1.runUntilComplete(30);
+    
+    const dispatches1 = orch1.getDispatches();
+    expect(dispatches1.length).toBeGreaterThan(0);
+    const dispatch1 = dispatches1[0]!;
+    const deliveredBefore = dispatch1.deliveredKw;
+    const dispatchId = dispatch1.id;
+    
+    orch1.saveToDb(db);
+    
+    const orch2 = new Orchestrator({ seed: 42 });
+    orch2.loadFromDb(db);
+    
+    const ackedCommands = orch2.getCommands().filter(c => c.status === 'acked');
+    for (const cmd of ackedCommands) {
+      const result = orch2.simulateDelivery(cmd.id);
+      expect(result.duplicate).toBe(true);
+      expect(result.delivered).toBe(false);
+    }
+    
+    const dispatches2 = orch2.getDispatches();
+    const dispatch2 = dispatches2.find(d => d.id === dispatchId);
+    expect(dispatch2).toBeDefined();
+    expect(dispatch2!.deliveredKw).toBe(deliveredBefore);
+    
+    db.close();
+  });
+
+  it('processedKeys serialization round-trips Set correctly', async () => {
+    const { FleetDb } = await import('./db.js');
+    const { seedFleet } = await import('./device.js');
+    
+    const db = new FleetDb({ path: ':memory:', inMemory: true });
+    
+    const devices = seedFleet(1, 42, 0);
+    const device = devices[0]!;
+    
+    device.processedKeys.add('key-1');
+    device.processedKeys.add('key-2');
+    device.processedKeys.add('key-3');
+    
+    db.saveDevices([device]);
+    const loaded = db.loadDevices();
+    
+    expect(loaded[0]!.processedKeys).toBeInstanceOf(Set);
+    expect(loaded[0]!.processedKeys.size).toBe(3);
+    expect(loaded[0]!.processedKeys.has('key-1')).toBe(true);
+    expect(loaded[0]!.processedKeys.has('key-2')).toBe(true);
+    expect(loaded[0]!.processedKeys.has('key-3')).toBe(true);
+    
+    db.close();
+  });
+});
