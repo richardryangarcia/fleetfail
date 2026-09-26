@@ -85,6 +85,18 @@ export {
   type GridStatus,
 } from './ercot.js';
 
+// ERCOT cached real data
+export {
+  generateErcotCacheSnapshot,
+  getZoneStressRanking,
+  createCachedLoadPreferences,
+  getErcotCache,
+  resetErcotCache,
+  type ErcotZoneLoad,
+  type ErcotGridSummary,
+  type ErcotCacheData,
+} from './ercot-cache.js';
+
 // Zone-preference allocator
 export {
   getZoneAllocations,

@@ -8,6 +8,10 @@
 
 **This is NOT Base proprietary architecture.** All datasets, telemetry, and demo figures are **synthetic** unless a file explicitly states otherwise. The ERCOT zone data, device characteristics, and grid metrics are fabricated for demonstration purposes only.
 
+### Texas Map View
+
+The `/map` page displays ~50-100 synthetic battery devices clustered by ERCOT weather zone. **These markers represent synthetic zone clusters, NOT real Base installations.** Device positions are deterministically seeded around zone centroids for demonstration purposes.
+
 ---
 
 ## Overview
@@ -149,6 +153,12 @@ pnpm test
 - ✅ **ERCOT Weather Zone Fixture**: Synthetic zone data with net load, temperature, wind/solar generation
 - ✅ **Zone-Preference Allocator**: Sort devices by zone weight for geographic dispatch preference
 - ✅ **Zone Activity Map**: Visual indicator of event activity by zone from event log
+- ✅ **Texas Map View** (`/map`): Interactive Leaflet map with ~50-100 devices clustered by ERCOT weather zone
+- ✅ **Click-to-Offline**: Click any device marker on the map to take it offline through the real fault/command path
+- ✅ **Reallocation Visuals**: Devices receiving reallocated power pulse/glow with rising kW driven by real `REALLOCATED` and `COMMAND_ACKED` events
+- ✅ **Zone Mass Outage**: Click zone name in side strip to trigger mass outage for that zone's devices
+- ✅ **ERCOT Cache**: Cached real ERCOT weather-zone load + wind/solar net-load outlook with "Cached / Replay" label
+- ✅ **Side Strip Metrics**: Always-visible panel showing Target vs Delivered, Online/Offline counts, Duplicates Ignored, Stale Rejected
 
 ## P2 Features (Not Implemented)
 
@@ -180,8 +190,11 @@ Default orchestrator config (`packages/engine/src/types.ts`):
 | `/api/reset` | POST | Reset fleet `{seed?, deviceCount?}` |
 | `/api/simulation` | POST | Control simulation `{action: 'start'|'stop'}` |
 | `/api/ercot` | GET | Get ERCOT zone data and allocations |
+| `/api/ercot-cache` | GET | Get cached ERCOT data with zone loads (labeled Cached / Replay) |
 
 ## Demo Flow
+
+### Ops Console (`/`)
 
 1. Open UI at http://localhost:43210
 2. Click "Start Dispatch" with 400 kW target
@@ -198,6 +211,21 @@ Default orchestrator config (`packages/engine/src/types.ts`):
    - `STALE_REJECTED` events for old commands
    - Dispatch converges to target
 8. Check metrics: duplicates ignored, stale rejected, reallocations all tracked
+
+### Texas Map View (`/map`)
+
+1. Open http://localhost:43210/map or click "Texas Map View" from ops console
+2. View ~50-100 synthetic devices clustered by ERCOT weather zone on the Texas map
+3. Start a 400kW dispatch from the side strip
+4. **Click a battery marker** to take that device offline (uses real fault/command path)
+5. Observe:
+   - Device turns red and offline on the map
+   - `DEVICE_OFFLINE` event emitted
+   - Surviving devices pulse/glow brighter (working harder)
+   - Side strip shows rising `Reallocations` count
+6. Click zone name in side strip to trigger mass outage for that zone
+7. Side strip always shows: Target vs Delivered, Online/Offline, Duplicates Ignored, Stale Rejected
+8. ERCOT banner shows "Cached / Replay" label with cached zone load data
 
 ## Technical Decisions
 

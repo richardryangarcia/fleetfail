@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation } from '@fleetfail/engine';
+import Link from 'next/link';
+import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData } from '@fleetfail/engine';
 
 interface ErcotData {
   zones: ErcotZone[];
@@ -148,10 +149,58 @@ function EventLog({ events }: { events: FleetEvent[] }) {
   );
 }
 
-function ErcotBanner({ data }: { data: ErcotData | null }) {
-  if (!data) return null;
+function ErcotBanner({ data, cachedData }: { data: ErcotData | null; cachedData: ErcotCacheData | null }) {
+  if (!cachedData && !data) return null;
   
-  const { gridStatus } = data;
+  if (cachedData) {
+    const { gridSummary, cacheLabel } = cachedData;
+    
+    return (
+      <div className="bg-gradient-to-r from-blue-900 to-purple-900 rounded-lg p-4 border border-blue-700">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-blue-300 uppercase tracking-wide">ERCOT Grid Status</span>
+              <span className="text-xs text-amber-400 font-semibold px-1.5 py-0.5 bg-amber-900/50 rounded">
+                {cacheLabel}
+              </span>
+            </div>
+            <div className="text-lg font-bold text-white">
+              {(gridSummary.totalLoadMw / 1000).toFixed(1)} GW Total Load
+            </div>
+          </div>
+          <div className="flex gap-6">
+            <div className="text-center">
+              <div className="text-2xl font-mono font-bold text-green-400">
+                {gridSummary.renewablesPercent.toFixed(1)}%
+              </div>
+              <div className="text-xs text-slate-400">Renewables</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-mono font-bold text-cyan-400">
+                {(gridSummary.totalWindMw / 1000).toFixed(1)} GW
+              </div>
+              <div className="text-xs text-slate-400">Wind</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-mono font-bold text-yellow-400">
+                {(gridSummary.totalSolarMw / 1000).toFixed(1)} GW
+              </div>
+              <div className="text-xs text-slate-400">Solar</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-mono font-bold text-emerald-400">
+                {gridSummary.frequencyHz.toFixed(2)} Hz
+              </div>
+              <div className="text-xs text-slate-400">Frequency</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  const { gridStatus } = data!;
   
   return (
     <div className="bg-gradient-to-r from-blue-900 to-purple-900 rounded-lg p-4 border border-blue-700">
@@ -308,22 +357,26 @@ function DispatchStatus({ dispatch }: { dispatch: Dispatch | null }) {
 export default function Home() {
   const [state, setState] = useState<SimulationState | null>(null);
   const [ercotData, setErcotData] = useState<ErcotData | null>(null);
+  const [cachedErcotData, setCachedErcotData] = useState<ErcotCacheData | null>(null);
   const [targetKw, setTargetKw] = useState(400);
   const [loading, setLoading] = useState(false);
   const [deviceCount, setDeviceCount] = useState(50);
 
   const fetchState = useCallback(async () => {
     try {
-      const [stateRes, ercotRes] = await Promise.all([
+      const [stateRes, ercotRes, cachedErcotRes] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/ercot'),
+        fetch('/api/ercot-cache'),
       ]);
-      const [stateData, ercotDataRes] = await Promise.all([
+      const [stateData, ercotDataRes, cachedErcotDataRes] = await Promise.all([
         stateRes.json(),
         ercotRes.json(),
+        cachedErcotRes.json(),
       ]);
       setState(stateData);
       setErcotData(ercotDataRes);
+      setCachedErcotData(cachedErcotDataRes);
     } catch (error) {
       console.error('Failed to fetch state:', error);
     }
@@ -412,6 +465,12 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Link 
+              href="/map" 
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-semibold transition-colors"
+            >
+              🗺️ Texas Map View
+            </Link>
             <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
               isRunning ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-400'
             }`}>
@@ -421,7 +480,7 @@ export default function Home() {
         </header>
 
         {/* ERCOT Banner */}
-        <ErcotBanner data={ercotData} />
+        <ErcotBanner data={ercotData} cachedData={cachedErcotData} />
 
         {/* Metrics Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">

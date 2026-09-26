@@ -31,7 +31,10 @@ export class FleetDb {
         epoch INTEGER NOT NULL,
         last_sequence INTEGER NOT NULL,
         processed_keys TEXT NOT NULL,
-        zone TEXT NOT NULL
+        zone TEXT NOT NULL,
+        latitude REAL NOT NULL DEFAULT 31.0,
+        longitude REAL NOT NULL DEFAULT -99.0,
+        current_setpoint_kw REAL NOT NULL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS commands (
@@ -86,8 +89,9 @@ export class FleetDb {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO devices (
         id, name, max_power_kw, capacity_kwh, soc_percent, reserve_percent,
-        status, last_telemetry_at, epoch, last_sequence, processed_keys, zone
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, last_telemetry_at, epoch, last_sequence, processed_keys, zone,
+        latitude, longitude, current_setpoint_kw
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     stmt.run(
@@ -102,7 +106,10 @@ export class FleetDb {
       device.epoch,
       device.lastSequence,
       JSON.stringify(Array.from(device.processedKeys)),
-      device.zone
+      device.zone,
+      device.latitude,
+      device.longitude,
+      device.currentSetpointKw
     );
   }
 
@@ -110,8 +117,9 @@ export class FleetDb {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO devices (
         id, name, max_power_kw, capacity_kwh, soc_percent, reserve_percent,
-        status, last_telemetry_at, epoch, last_sequence, processed_keys, zone
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, last_telemetry_at, epoch, last_sequence, processed_keys, zone,
+        latitude, longitude, current_setpoint_kw
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     const insert = this.db.transaction((devices: Device[]) => {
@@ -128,7 +136,10 @@ export class FleetDb {
           device.epoch,
           device.lastSequence,
           JSON.stringify(Array.from(device.processedKeys)),
-          device.zone
+          device.zone,
+          device.latitude,
+          device.longitude,
+          device.currentSetpointKw
         );
       }
     });
@@ -150,6 +161,9 @@ export class FleetDb {
       last_sequence: number;
       processed_keys: string;
       zone: string;
+      latitude: number;
+      longitude: number;
+      current_setpoint_kw: number;
     }>;
     
     return rows.map(row => ({
@@ -165,6 +179,9 @@ export class FleetDb {
       lastSequence: row.last_sequence,
       processedKeys: new Set(JSON.parse(row.processed_keys)),
       zone: row.zone,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      currentSetpointKw: row.current_setpoint_kw,
     }));
   }
 
