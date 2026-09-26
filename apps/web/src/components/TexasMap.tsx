@@ -29,22 +29,27 @@ interface TexasMapProps {
 const FLEET_CENTER: [number, number] = [36.0, -94.0];
 const FLEET_ZOOM = 5;
 
-function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boolean): L.DivIcon {
+function createDeviceIcon(device: Device, isWorking: boolean, isCovering: boolean): L.DivIcon {
   let bgColor = '#4a5260';
   let borderColor = bgColor;
   let size = 12;
   let extraClass = '';
+  let labelClass = 'kw-label';
   
   if (device.status === 'offline') {
     bgColor = '#e05454';
     borderColor = '#e05454';
-  } else if (isWorking) {
+  } else if (isCovering && isWorking) {
     bgColor = '#3dba7a';
+    borderColor = '#3dba7a';
+    size = 18;
+    extraClass = 'covering-marker';
+    labelClass = 'kw-label covering-label';
+  } else if (isWorking) {
+    bgColor = '#f0a020';
     borderColor = '#f0a020';
     size = 18;
     extraClass = 'working-marker';
-  } else if (isReallocated) {
-    borderColor = '#f0a020';
   }
   
   const html = `
@@ -56,7 +61,7 @@ function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boo
       border-radius: 50%;
       box-shadow: 0 0 4px rgba(0,0,0,0.5);
     "></div>
-    ${isWorking ? `<div class="kw-label">${device.currentSetpointKw.toFixed(0)}kW</div>` : ''}
+    ${isWorking ? `<div class="${labelClass}">${device.currentSetpointKw.toFixed(0)}kW</div>` : ''}
   `;
   
   return L.divIcon({
@@ -67,9 +72,9 @@ function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boo
   });
 }
 
-function createPopupContent(device: Device, isReallocated: boolean = false): string {
+function createPopupContent(device: Device, isCovering: boolean = false): string {
   const atMax = device.currentSetpointKw >= device.maxPowerKw - 0.1;
-  const reallocBadge = isReallocated 
+  const coveringBadge = isCovering 
     ? `<div style="margin-top: 4px; padding: 2px 6px; background: #1a2518; border: 1px solid #2a4528; color: #3dba7a; font-size: 10px; font-weight: 600;">
         ${atMax ? '↑ AT MAX — covering slack' : '↑ COVERING SLACK'}
        </div>`
@@ -83,7 +88,7 @@ function createPopupContent(device: Device, isReallocated: boolean = false): str
       <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
       <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
       ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
-      ${reallocBadge}
+      ${coveringBadge}
     </div>
   `;
 }
@@ -103,7 +108,9 @@ function ClusterLayer({
   const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null);
   const markersRef = useRef<Map<string, DeviceMarker>>(new Map());
   const onDeviceClickRef = useRef(onDeviceClick);
+  const recentReallocationsRef = useRef(recentReallocations);
   onDeviceClickRef.current = onDeviceClick;
+  recentReallocationsRef.current = recentReallocations;
 
   useEffect(() => {
     if (!map || typeof window === 'undefined') return;
@@ -121,18 +128,23 @@ function ClusterLayer({
         
         let offlineCount = 0;
         let workingCount = 0;
+        let coveringCount = 0;
         
         markers.forEach((m) => {
           const device = (m as DeviceMarker).deviceData;
           if (device) {
             if (device.status === 'offline') offlineCount++;
-            if (device.currentSetpointKw > 0) workingCount++;
+            if (device.currentSetpointKw > 0) {
+              workingCount++;
+              if (recentReallocationsRef.current.has(device.id)) coveringCount++;
+            }
           }
         });
         
         let bgColor = '#4a5260';
         if (offlineCount > childCount * 0.3) bgColor = '#e05454';
-        else if (workingCount > 0) bgColor = '#3dba7a';
+        else if (coveringCount > 0) bgColor = '#3dba7a';
+        else if (workingCount > 0) bgColor = '#f0a020';
         
         const size = childCount < 100 ? 40 : childCount < 1000 ? 50 : 60;
         
@@ -191,13 +203,13 @@ function ClusterLayer({
     for (const device of devices) {
       const existingMarker = existingMarkers.get(device.id);
       const isWorking = device.currentSetpointKw > 0;
-      const isReallocated = recentReallocations.has(device.id) && isWorking;
-      const newIcon = createDeviceIcon(device, isWorking, isReallocated);
+      const isCovering = recentReallocations.has(device.id) && isWorking;
+      const newIcon = createDeviceIcon(device, isWorking, isCovering);
 
       if (existingMarker) {
         existingMarker.deviceData = device;
         existingMarker.setIcon(newIcon);
-        existingMarker.setPopupContent(createPopupContent(device, isReallocated));
+        existingMarker.setPopupContent(createPopupContent(device, isCovering));
 
         existingMarker.off('click');
         if (device.status === 'online') {
@@ -208,7 +220,7 @@ function ClusterLayer({
       } else {
         const marker = L.marker([device.latitude, device.longitude], { icon: newIcon }) as DeviceMarker;
         marker.deviceData = device;
-        marker.bindPopup(createPopupContent(device, isReallocated));
+        marker.bindPopup(createPopupContent(device, isCovering));
 
         if (device.status === 'online') {
           marker.on('click', () => {
@@ -237,19 +249,16 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
 
   useEffect(() => {
     const recentEvents = events.slice(-100);
-    const reallocatedDevices = new Set<string>();
+    const coveringDevices = new Set<string>();
     
     for (const event of recentEvents) {
       if (event.type === 'REALLOCATED') {
         const toDeviceId = (event.details as { toDeviceId: string }).toDeviceId;
-        if (toDeviceId) reallocatedDevices.add(toDeviceId);
-      }
-      if (event.type === 'COMMAND_ACKED' && event.deviceId) {
-        reallocatedDevices.add(event.deviceId);
+        if (toDeviceId) coveringDevices.add(toDeviceId);
       }
     }
     
-    setRecentReallocations(reallocatedDevices);
+    setRecentReallocations(coveringDevices);
   }, [events]);
 
   const isDispatchActive = dispatch && dispatch.status === 'executing';
@@ -257,14 +266,17 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
   const deviceSummary = useMemo(() => {
     const txDevices = devices.filter(d => d.region === 'TX');
     const ilDevices = devices.filter(d => d.region === 'IL');
+    const workingDevices = devices.filter(d => d.currentSetpointKw > 0);
+    const coveringDevices = workingDevices.filter(d => recentReallocations.has(d.id));
     return {
       total: devices.length,
       tx: txDevices.length,
       il: ilDevices.length,
       online: devices.filter(d => d.status === 'online').length,
-      working: devices.filter(d => d.currentSetpointKw > 0).length,
+      working: workingDevices.length,
+      covering: coveringDevices.length,
     };
-  }, [devices]);
+  }, [devices, recentReallocations]);
 
   if (!mounted) {
     return (
@@ -306,6 +318,9 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
           {deviceSummary.working > 0 && (
             <span className="text-nc-accent font-semibold">Working: {deviceSummary.working}</span>
           )}
+          {deviceSummary.covering > 0 && (
+            <span className="text-nc-ok font-semibold">Covering: {deviceSummary.covering}</span>
+          )}
         </div>
       </div>
       
@@ -320,11 +335,25 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
         @keyframes pulse-working {
           0% { 
             transform: scale(1);
-            box-shadow: 0 0 4px #3dba7a;
+            box-shadow: 0 0 4px #f0a020;
           }
           50% { 
             transform: scale(1.2);
-            box-shadow: 0 0 12px #3dba7a;
+            box-shadow: 0 0 12px #f0a020;
+          }
+          100% { 
+            transform: scale(1);
+            box-shadow: 0 0 4px #f0a020;
+          }
+        }
+        @keyframes pulse-covering {
+          0% { 
+            transform: scale(1);
+            box-shadow: 0 0 4px #3dba7a;
+          }
+          50% { 
+            transform: scale(1.3);
+            box-shadow: 0 0 16px #3dba7a;
           }
           100% { 
             transform: scale(1);
@@ -333,6 +362,9 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
         }
         .working-marker {
           animation: pulse-working 0.8s ease-in-out infinite;
+        }
+        .covering-marker {
+          animation: pulse-covering 0.6s ease-in-out infinite;
         }
         .custom-device-icon {
           background: transparent !important;
@@ -355,6 +387,10 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
           padding: 1px 4px;
           border: 1px solid #a87018;
           white-space: nowrap;
+        }
+        .covering-label {
+          color: #3dba7a;
+          border-color: #2a8a5a;
         }
         .device-popup {
           font-size: 11px;
