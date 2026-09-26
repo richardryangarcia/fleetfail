@@ -351,7 +351,7 @@ export class FleetDb {
 
   saveEvents(evts: FleetEvent[]): void {
     const stmt = this.db.prepare(`
-      INSERT INTO events (
+      INSERT OR IGNORE INTO events (
         id, type, timestamp, dispatch_id, device_id, command_id, details
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `);

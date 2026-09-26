@@ -7,6 +7,7 @@ import type {
   OrchestratorConfig,
 } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
+import type { FleetDb } from './db.js';
 import { seedFleet, getAvailablePowerKw, setDeviceStatus } from './device.js';
 import {
   createCommand,
@@ -691,5 +692,72 @@ export class Orchestrator {
     };
     this.sequenceCounter.clear();
     this.faultInjector.clearAllDeviceFaults();
+  }
+
+  /**
+   * Persist orchestrator state to SQLite database.
+   * This saves devices (including processedKeys for idempotency),
+   * commands, dispatches, and events.
+   */
+  saveToDb(db: FleetDb): void {
+    const devices = Array.from(this.state.devices.values());
+    const commands = Array.from(this.state.commands.values());
+    const dispatches = Array.from(this.state.dispatches.values());
+    
+    db.saveDevices(devices);
+    db.saveCommands(commands);
+    for (const dispatch of dispatches) {
+      db.saveDispatch(dispatch);
+    }
+    db.saveEvents(this.state.events);
+  }
+
+  /**
+   * Load orchestrator state from SQLite database.
+   * This restores devices (including processedKeys for idempotency),
+   * commands, dispatches, and events. Critical for ensuring idempotency
+   * survives process restart.
+   */
+  loadFromDb(db: FleetDb): void {
+    const devices = db.loadDevices();
+    const commands = db.loadCommands();
+    const dispatches = db.loadDispatches();
+    const events = db.loadEvents();
+    
+    this.state.devices.clear();
+    for (const device of devices) {
+      this.state.devices.set(device.id, device);
+    }
+    
+    this.state.commands.clear();
+    for (const command of commands) {
+      this.state.commands.set(command.id, command);
+    }
+    
+    this.state.dispatches.clear();
+    for (const dispatch of dispatches) {
+      this.state.dispatches.set(dispatch.id, dispatch);
+    }
+    
+    this.state.events = events;
+    
+    const executingDispatch = dispatches.find(d => 
+      d.status === 'executing' || d.status === 'allocating'
+    );
+    this.state.activeDispatchId = executingDispatch?.id ?? null;
+    
+    if (events.length > 0) {
+      const maxTime = Math.max(...events.map(e => e.timestamp));
+      if (maxTime > this.state.currentTime) {
+        this.state.currentTime = maxTime;
+      }
+    }
+    
+    for (const command of commands) {
+      const current = this.sequenceCounter.get(command.dispatchId) ?? 0;
+      if (command.sequence > current) {
+        this.sequenceCounter.set(command.dispatchId, command.sequence);
+      }
+    }
   }
 }
