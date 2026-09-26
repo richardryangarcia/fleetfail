@@ -25,7 +25,7 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot } from '@fleetfail/engine';
-import { FleetDb } from '@fleetfail/engine';
+import { FleetDb, encodeErcotSort } from '@fleetfail/engine';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -112,10 +112,29 @@ const DEFAULT_RETRY_DELAY_MS = 1000;
 const STAGGER_DELAY_MS = 200;
 
 let ercotDb: FleetDb | null = null;
+let ercotDbInitFailed = false;
+let ercotDbErrorLogged = false;
 
-function getErcotDb(): FleetDb {
+/**
+ * Get the ERCOT SQLite cache database.
+ * Returns null if better-sqlite3 bindings are unavailable (e.g., Next.js webpack).
+ * Logs the error once on first failure, then silently returns null.
+ */
+function getErcotDb(): FleetDb | null {
+  if (ercotDbInitFailed) {
+    return null;
+  }
   if (!ercotDb) {
-    ercotDb = new FleetDb({ path: '.ercot-cache.db', inMemory: false });
+    try {
+      ercotDb = new FleetDb({ path: '.ercot-cache.db', inMemory: false });
+    } catch (err) {
+      ercotDbInitFailed = true;
+      if (!ercotDbErrorLogged) {
+        ercotDbErrorLogged = true;
+        console.warn('SQLite cache unavailable (better-sqlite3 bindings missing), falling back to fixture:', err);
+      }
+      return null;
+    }
   }
   return ercotDb;
 }
@@ -246,7 +265,7 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
       size: 24,
-      sort: 'deliveryDate desc,hourEnding desc',
+      sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
     },
   });
   
@@ -260,7 +279,7 @@ export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZo
   const response = await client.get<ErcotApiResponse<LoadForecastByZone>>('/np3-565-cd/lf_by_model_weather_zone', {
     params: {
       size: 24,
-      sort: 'deliveryDate desc,hourEnding desc',
+      sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
     },
   });
   
@@ -274,7 +293,7 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
   const response = await client.get<ErcotApiResponse<WindActualForecast>>('/np4-742-cd/wpp_hrly_actual_fcast_geo', {
     params: {
       size: 100,
-      sort: 'deliveryDate desc,hourEnding desc',
+      sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
     },
   });
   
@@ -295,7 +314,7 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
       const response = await client.get<ErcotApiResponse<SolarActualForecast>>(path, {
         params: {
           size: 100,
-          sort: 'deliveryDate desc,hourEnding desc',
+          sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
         },
       });
       
@@ -474,26 +493,30 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
     
     const result = buildErcotCacheData(actualLoad, loadForecast, windData, solarData);
     
-    try {
-      const db = getErcotDb();
-      db.saveLastGoodGrid(result);
-    } catch (dbError) {
-      console.warn('Failed to save ERCOT data to SQLite cache:', dbError);
+    const db = getErcotDb();
+    if (db) {
+      try {
+        db.saveLastGoodGrid(result);
+      } catch (dbError) {
+        console.warn('Failed to save ERCOT data to SQLite cache:', dbError);
+      }
     }
     
     return result;
   } catch (error) {
     console.error('ERCOT live fetch failed after retries:', error);
     
-    try {
-      const db = getErcotDb();
-      const cached = db.loadLastGoodGrid();
-      if (cached) {
-        console.log('Falling back to last-good ERCOT grid data from SQLite');
-        return cached;
+    const db = getErcotDb();
+    if (db) {
+      try {
+        const cached = db.loadLastGoodGrid();
+        if (cached) {
+          console.log('Falling back to last-good ERCOT grid data from SQLite');
+          return cached;
+        }
+      } catch (dbError) {
+        console.warn('Failed to load ERCOT data from SQLite cache:', dbError);
       }
-    } catch (dbError) {
-      console.warn('Failed to load ERCOT data from SQLite cache:', dbError);
     }
     
     throw error;
@@ -617,6 +640,7 @@ export function clearErcotDbCache(): void {
     ercotDb.close();
     ercotDb = null;
   }
+  ercotDbInitFailed = false;
 }
 
 // ============================================================================
@@ -665,7 +689,7 @@ export async function fetchSppRealTime(
       params: {
         settlementPoint,
         size: 100,
-        sort: 'deliveryDate desc,deliveryHour desc,deliveryInterval desc',
+        sort: encodeErcotSort(['deliveryDate desc', 'deliveryHour desc', 'deliveryInterval desc']),
       },
     }
   );
@@ -706,7 +730,7 @@ export async function fetchSppDayAhead(
       params: {
         settlementPoint,
         size: 48,
-        sort: 'deliveryDate desc,hourEnding desc',
+        sort: encodeErcotSort(['deliveryDate desc', 'hourEnding desc']),
       },
     }
   );
@@ -754,26 +778,30 @@ export async function fetchLiveErcotPrices(
     
     const result = buildPriceCacheData(rtPrices, damPrices, settlementPoint);
     
-    try {
-      const db = getErcotDb();
-      db.saveLastGoodPrices(result);
-    } catch (dbError) {
-      console.warn('Failed to save ERCOT price data to SQLite cache:', dbError);
+    const db = getErcotDb();
+    if (db) {
+      try {
+        db.saveLastGoodPrices(result);
+      } catch (dbError) {
+        console.warn('Failed to save ERCOT price data to SQLite cache:', dbError);
+      }
     }
     
     return result;
   } catch (error) {
     console.error('ERCOT price fetch failed after retries:', error);
     
-    try {
-      const db = getErcotDb();
-      const cached = db.loadLastGoodPrices(settlementPoint);
-      if (cached) {
-        console.log('Falling back to last-good ERCOT price data from SQLite');
-        return cached;
+    const db = getErcotDb();
+    if (db) {
+      try {
+        const cached = db.loadLastGoodPrices(settlementPoint);
+        if (cached) {
+          console.log('Falling back to last-good ERCOT price data from SQLite');
+          return cached;
+        }
+      } catch (dbError) {
+        console.warn('Failed to load ERCOT price data from SQLite cache:', dbError);
       }
-    } catch (dbError) {
-      console.warn('Failed to load ERCOT price data from SQLite cache:', dbError);
     }
     
     throw error;
