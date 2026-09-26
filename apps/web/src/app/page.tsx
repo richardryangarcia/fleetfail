@@ -20,340 +20,6 @@ interface SimulationState {
   currentTime: number;
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    online: 'bg-green-500',
-    offline: 'bg-red-500',
-    reconnecting: 'bg-yellow-500',
-  };
-  return (
-    <span className={`inline-block w-2 h-2 rounded-full ${colors[status] || 'bg-gray-500'}`} />
-  );
-}
-
-function MetricCard({ label, value, unit, color }: { label: string; value: number | string; unit?: string; color?: string }) {
-  return (
-    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-      <div className="text-slate-400 text-sm">{label}</div>
-      <div className={`text-2xl font-mono font-bold ${color || 'text-white'}`}>
-        {typeof value === 'number' ? value.toFixed(1) : value}
-        {unit && <span className="text-sm text-slate-500 ml-1">{unit}</span>}
-      </div>
-    </div>
-  );
-}
-
-function DeviceCard({ device, onInjectFault, onRestore }: { 
-  device: Device; 
-  onInjectFault: (deviceId: string, faultType: string) => void;
-  onRestore: (deviceId: string) => void;
-}) {
-  const availablePower = Math.max(0, device.socPercent - device.reservePercent) / 100 * device.maxPowerKw;
-  
-  return (
-    <div className={`p-2 rounded border ${
-      device.status === 'online' ? 'border-green-700 bg-green-950/30' : 
-      device.status === 'offline' ? 'border-red-700 bg-red-950/30' : 
-      'border-yellow-700 bg-yellow-950/30'
-    }`}>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-mono truncate" title={device.name}>{device.name}</span>
-        <StatusBadge status={device.status} />
-      </div>
-      <div className="text-xs text-slate-400">
-        <div className="flex justify-between">
-          <span>SOC</span>
-          <span>{device.socPercent.toFixed(0)}%</span>
-        </div>
-        <div className="w-full bg-slate-700 rounded-full h-1.5 mt-1">
-          <div 
-            className={`h-1.5 rounded-full ${device.socPercent > 50 ? 'bg-green-500' : device.socPercent > 25 ? 'bg-yellow-500' : 'bg-red-500'}`}
-            style={{ width: `${device.socPercent}%` }}
-          />
-        </div>
-        <div className="flex justify-between mt-1">
-          <span>Avail</span>
-          <span>{availablePower.toFixed(1)} kW</span>
-        </div>
-      </div>
-      <div className="flex gap-1 mt-2">
-        {device.status === 'online' ? (
-          <button 
-            onClick={() => onInjectFault(device.id, 'offline')}
-            className="flex-1 text-xs px-1 py-0.5 bg-red-800 hover:bg-red-700 rounded"
-          >
-            Take Offline
-          </button>
-        ) : (
-          <button 
-            onClick={() => onRestore(device.id)}
-            className="flex-1 text-xs px-1 py-0.5 bg-green-800 hover:bg-green-700 rounded"
-          >
-            Restore
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function EventLog({ events }: { events: FleetEvent[] }) {
-  const eventColors: Record<string, string> = {
-    COMMAND_SENT: 'text-blue-400',
-    COMMAND_ACKED: 'text-green-400',
-    ACK_TIMEOUT: 'text-yellow-400',
-    RETRY_SAME_ID: 'text-yellow-300',
-    DUPLICATE_IGNORED: 'text-purple-400',
-    STALE_REJECTED: 'text-orange-400',
-    DEVICE_EXCLUDED: 'text-gray-400',
-    REALLOCATED: 'text-cyan-400',
-    DEVICE_OFFLINE: 'text-red-400',
-    DEVICE_ONLINE: 'text-green-300',
-    DEVICE_RECONNECTED: 'text-green-500',
-    DISPATCH_STARTED: 'text-blue-300',
-    DISPATCH_CONVERGED: 'text-green-500',
-    DISPATCH_PARTIAL: 'text-yellow-500',
-    DISPATCH_INSUFFICIENT: 'text-red-500',
-    COMMAND_EXPIRED: 'text-gray-500',
-  };
-
-  return (
-    <div className="bg-slate-900 rounded-lg border border-slate-700 h-64 overflow-hidden">
-      <div className="px-3 py-2 border-b border-slate-700 text-sm font-semibold">Event Log</div>
-      <div className="overflow-y-auto h-52 p-2 space-y-1 font-mono text-xs">
-        {events.slice().reverse().map((event) => (
-          <div key={event.id} className="flex gap-2">
-            <span className="text-slate-500 w-20 shrink-0">
-              {new Date(event.timestamp).toLocaleTimeString()}
-            </span>
-            <span className={eventColors[event.type] || 'text-slate-300'}>
-              {event.type}
-            </span>
-            {event.deviceId && (
-              <span className="text-slate-500">
-                [{event.deviceId.slice(0, 8)}]
-              </span>
-            )}
-            {event.details && Object.keys(event.details).length > 0 && (
-              <span className="text-slate-600">
-                {JSON.stringify(event.details)}
-              </span>
-            )}
-          </div>
-        ))}
-        {events.length === 0 && (
-          <div className="text-slate-500 text-center py-8">No events yet</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ErcotBanner({ data, cachedData }: { data: ErcotData | null; cachedData: ErcotCacheData | null }) {
-  if (!cachedData && !data) return null;
-  
-  if (cachedData) {
-    const { gridSummary, cacheLabel } = cachedData;
-    
-    return (
-      <div className="bg-gradient-to-r from-blue-900 to-purple-900 rounded-lg p-4 border border-blue-700">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-blue-300 uppercase tracking-wide">ERCOT Grid Status</span>
-              <span className="text-xs text-amber-400 font-semibold px-1.5 py-0.5 bg-amber-900/50 rounded">
-                {cacheLabel}
-              </span>
-            </div>
-            <div className="text-lg font-bold text-white">
-              {(gridSummary.totalLoadMw / 1000).toFixed(1)} GW Total Load
-            </div>
-          </div>
-          <div className="flex gap-6">
-            <div className="text-center">
-              <div className="text-2xl font-mono font-bold text-green-400">
-                {gridSummary.renewablesPercent.toFixed(1)}%
-              </div>
-              <div className="text-xs text-slate-400">Renewables</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-mono font-bold text-cyan-400">
-                {(gridSummary.totalWindMw / 1000).toFixed(1)} GW
-              </div>
-              <div className="text-xs text-slate-400">Wind</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-mono font-bold text-yellow-400">
-                {(gridSummary.totalSolarMw / 1000).toFixed(1)} GW
-              </div>
-              <div className="text-xs text-slate-400">Solar</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-mono font-bold text-emerald-400">
-                {gridSummary.frequencyHz.toFixed(2)} Hz
-              </div>
-              <div className="text-xs text-slate-400">Frequency</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  
-  const { gridStatus } = data!;
-  
-  return (
-    <div className="bg-gradient-to-r from-blue-900 to-purple-900 rounded-lg p-4 border border-blue-700">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="text-xs text-blue-300 uppercase tracking-wide">ERCOT Grid Status (Synthetic)</div>
-          <div className="text-lg font-bold text-white">
-            {(gridStatus.totalLoadMw / 1000).toFixed(1)} GW Total Load
-          </div>
-        </div>
-        <div className="flex gap-6">
-          <div className="text-center">
-            <div className="text-2xl font-mono font-bold text-green-400">
-              {gridStatus.renewablePercent.toFixed(1)}%
-            </div>
-            <div className="text-xs text-slate-400">Renewables</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-mono font-bold text-yellow-400">
-              {gridStatus.avgTemperatureF.toFixed(0)}°F
-            </div>
-            <div className="text-xs text-slate-400">Avg Temp</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-mono font-bold text-cyan-400">
-              {(gridStatus.renewablesMw / 1000).toFixed(1)} GW
-            </div>
-            <div className="text-xs text-slate-400">Wind + Solar</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ZoneMap({ data, events }: { data: ErcotData | null; events: FleetEvent[] }) {
-  if (!data) return null;
-  
-  const { zoneAllocations } = data;
-  
-  const recentEventsByZone = new Map<string, number>();
-  for (const event of events.slice(-50)) {
-    if (event.deviceId) {
-      const allocation = zoneAllocations.find(za => 
-        za.devices.some(d => d.id === event.deviceId)
-      );
-      if (allocation) {
-        const count = recentEventsByZone.get(allocation.zone.id) ?? 0;
-        recentEventsByZone.set(allocation.zone.id, count + 1);
-      }
-    }
-  }
-  
-  return (
-    <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
-      <h2 className="font-semibold mb-3">Zone Allocation (Synthetic)</h2>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        {zoneAllocations.map(za => {
-          const eventActivity = recentEventsByZone.get(za.zone.id) ?? 0;
-          const activityLevel = eventActivity > 10 ? 'high' : eventActivity > 3 ? 'medium' : 'low';
-          
-          return (
-            <div 
-              key={za.zone.id}
-              className={`p-2 rounded border ${
-                activityLevel === 'high' ? 'border-red-500 bg-red-950/30' :
-                activityLevel === 'medium' ? 'border-yellow-500 bg-yellow-950/30' :
-                'border-slate-600 bg-slate-900/30'
-              }`}
-            >
-              <div className="flex justify-between items-center">
-                <span className="text-sm font-semibold">{za.zone.name}</span>
-                {activityLevel !== 'low' && (
-                  <span className={`w-2 h-2 rounded-full ${
-                    activityLevel === 'high' ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'
-                  }`} />
-                )}
-              </div>
-              <div className="text-xs text-slate-400 mt-1">
-                <div className="flex justify-between">
-                  <span>Devices</span>
-                  <span>{za.onlineCount}/{za.devices.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Available</span>
-                  <span className="text-green-400">{za.availableCapacityKw.toFixed(1)} kW</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Zone Load</span>
-                  <span className="text-blue-400">{(za.zone.netLoadMw / 1000).toFixed(1)} GW</span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function DispatchStatus({ dispatch }: { dispatch: Dispatch | null }) {
-  if (!dispatch) {
-    return (
-      <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-        <div className="text-slate-400 text-sm">No Active Dispatch</div>
-        <div className="text-slate-500 text-xs mt-1">Start a dispatch to see status</div>
-      </div>
-    );
-  }
-
-  const progressPct = dispatch.targetKw > 0 ? (dispatch.deliveredKw / dispatch.targetKw) * 100 : 0;
-  const statusColors: Record<string, string> = {
-    allocating: 'text-blue-400',
-    executing: 'text-yellow-400',
-    converged: 'text-green-400',
-    partial: 'text-orange-400',
-    insufficient_capacity: 'text-red-400',
-    failed: 'text-red-500',
-  };
-
-  return (
-    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-slate-400 text-sm">Dispatch Status</span>
-        <span className={`text-sm font-semibold ${statusColors[dispatch.status]}`}>
-          {dispatch.status.toUpperCase().replace('_', ' ')}
-        </span>
-      </div>
-      <div className="space-y-2">
-        <div className="flex justify-between text-sm">
-          <span>Target</span>
-          <span className="font-mono">{dispatch.targetKw.toFixed(1)} kW</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span>Delivered</span>
-          <span className="font-mono text-green-400">{dispatch.deliveredKw.toFixed(1)} kW</span>
-        </div>
-        <div className="w-full bg-slate-700 rounded-full h-3 mt-2">
-          <div 
-            className={`h-3 rounded-full transition-all duration-300 ${
-              progressPct >= 99 ? 'bg-green-500' : progressPct >= 50 ? 'bg-yellow-500' : 'bg-blue-500'
-            }`}
-            style={{ width: `${Math.min(100, progressPct)}%` }}
-          />
-        </div>
-        <div className="text-right text-xs text-slate-500">
-          {progressPct.toFixed(1)}% complete
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function Home() {
   const [state, setState] = useState<SimulationState | null>(null);
   const [ercotData, setErcotData] = useState<ErcotData | null>(null);
@@ -443,161 +109,406 @@ export default function Home() {
 
   if (!state) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-xl">Loading FleetFail Simulator...</div>
+      <div className="h-screen flex items-center justify-center bg-nc-bg">
+        <div className="text-nc-ink-dim">Loading FleetFail Simulator...</div>
       </div>
     );
   }
 
   const { metrics, devices, events, activeDispatch, isRunning } = state;
+  const progressPct = metrics.dispatchTargetKw > 0 
+    ? (metrics.deliveredKw / metrics.dispatchTargetKw) * 100 
+    : 0;
+
+  const eventColors: Record<string, string> = {
+    COMMAND_SENT: 'text-nc-accent',
+    COMMAND_ACKED: 'text-nc-ink-dim',
+    ACK_TIMEOUT: 'text-nc-warn',
+    RETRY_SAME_ID: 'text-nc-accent',
+    DUPLICATE_IGNORED: 'text-nc-ink-dim',
+    STALE_REJECTED: 'text-nc-ink-dim',
+    DEVICE_EXCLUDED: 'text-nc-ink-dim',
+    REALLOCATED: 'text-nc-accent',
+    DEVICE_OFFLINE: 'text-nc-bad',
+    DEVICE_ONLINE: 'text-nc-ok',
+    DEVICE_RECONNECTED: 'text-nc-ok',
+    DISPATCH_STARTED: 'text-nc-accent',
+    DISPATCH_CONVERGED: 'text-nc-ok',
+    DISPATCH_PARTIAL: 'text-nc-warn',
+    DISPATCH_INSUFFICIENT: 'text-nc-bad',
+    COMMAND_EXPIRED: 'text-nc-ink-dim',
+  };
+
+  const formatEventMessage = (event: FleetEvent): string => {
+    const details = event.details as Record<string, unknown> | undefined;
+    if (event.type === 'COMMAND_SENT') {
+      return `target=${metrics.dispatchTargetKw}kW ${event.commandId ? `id=${event.commandId.slice(0, 12)}` : ''}`;
+    }
+    if (event.type === 'DEVICE_OFFLINE' || event.type === 'DEVICE_RECONNECTED') {
+      return event.deviceId ? `${event.deviceId.slice(0, 8)} ${details?.zone || ''}` : '';
+    }
+    if (event.type === 'REALLOCATED') {
+      const kw = details?.reallocatedKw;
+      return kw ? `${kw}kW redistributed` : 'power redistributed';
+    }
+    if (event.type === 'STALE_REJECTED') {
+      return event.deviceId ? `${event.deviceId.slice(0, 8)}` : '';
+    }
+    if (event.deviceId) {
+      return event.deviceId.slice(0, 8);
+    }
+    return '';
+  };
 
   return (
-    <main className="min-h-screen p-4 lg:p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
-        <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-bold">
-              FleetFail <span className="text-green-400">⚡</span>
-            </h1>
-            <p className="text-slate-400 text-sm">
-              Resilient Dispatch Simulator — Proving idempotent at-least-once delivery
-            </p>
+    <div className="h-screen flex flex-col max-w-[1440px] mx-auto border-l border-r border-nc-line">
+      {/* Header - 44px */}
+      <header className="h-11 flex items-center justify-between px-4 border-b border-nc-line-strong bg-nc-elev shrink-0">
+        <div className="flex items-baseline gap-2.5">
+          <h1 className="text-sm font-semibold tracking-wide text-nc-num">FleetFail</h1>
+          <span className="text-[11px] text-nc-ink-mute">Resilient Dispatch Simulator · Base Power × AITX</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className={`inline-flex items-center gap-1.5 font-mono text-[11px] font-semibold tracking-wider px-2 py-0.5 border ${
+            isRunning 
+              ? 'text-nc-accent border-nc-accent-dim bg-[#1a1408]' 
+              : 'text-nc-idle border-nc-line-strong bg-nc-panel'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-[1px] ${isRunning ? 'bg-nc-accent' : 'bg-nc-idle'}`} />
+            {isRunning ? 'RUNNING' : 'IDLE'}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4 font-mono text-[11px] text-nc-ink-dim">
+            <span>devices <strong className="text-nc-num font-medium">{metrics.devicesOnline}</strong>/{devices.length}</span>
+            <span>tick <strong className="text-nc-num font-medium">142ms</strong></span>
+          </div>
+        </div>
+      </header>
+
+      {/* Proof Strip - 36px */}
+      <div className="h-9 grid grid-cols-5 border-b border-nc-line-strong bg-[#0c0e12] shrink-0">
+        <ProofCell label="Delivered" value={Math.round(metrics.deliveredKw)} accent />
+        <ProofCell label="Pending Cmds" value={metrics.pendingCommands} />
+        <ProofCell label="Duplicates Ignored" value={metrics.duplicatesIgnored} />
+        <ProofCell label="Stale Rejected" value={metrics.staleRejected} warn={metrics.staleRejected > 0} />
+        <ProofCell label="Reallocations" value={metrics.reallocations} accent last />
+      </div>
+
+      {/* Body - 220px | 1fr | 340px */}
+      <div className="flex-1 grid grid-cols-[220px_1fr_340px] min-h-0 overflow-hidden">
+        {/* Left Verb Column */}
+        <aside className="border-r border-nc-line-strong bg-nc-panel flex flex-col p-3 gap-3.5 overflow-y-auto">
+          <VerbBlock title="Dispatch Control">
+            <Field label="Target Power (kW)">
+              <input
+                type="number"
+                value={targetKw}
+                onChange={(e) => setTargetKw(Number(e.target.value))}
+                className="w-full bg-nc-bg border border-nc-line-strong text-nc-num font-mono text-xs px-2 py-1.5 outline-none focus:border-nc-accent-dim"
+                min={0}
+                max={2000}
+              />
+            </Field>
+            <Field label="Device Count">
+              <input
+                type="text"
+                value={`${metrics.devicesOnline} / ${devices.length}`}
+                readOnly
+                className="w-full bg-nc-bg border border-nc-line-strong text-nc-num font-mono text-xs px-2 py-1.5"
+              />
+            </Field>
+            <Button
+              variant="primary"
+              onClick={handleDispatch}
+              disabled={loading || activeDispatch?.status === 'executing'}
+              hint={activeDispatch?.id ? `id=${activeDispatch.id.slice(0, 12)}` : undefined}
+            >
+              Start Dispatch
+            </Button>
+          </VerbBlock>
+
+          <Divider />
+
+          <VerbBlock title="Fault Injection">
+            <Button variant="danger" onClick={handleMassOutage} hint="take offline · n=10">
+              Mass Outage
+            </Button>
+            <Button variant="ok" onClick={handleRestoreAll} hint="rejoin + reallocate">
+              Restore All
+            </Button>
+          </VerbBlock>
+
+          <Divider />
+
+          <VerbBlock title="Fleet">
+            <Button variant="ghost" onClick={handleReset}>
+              Reset Fleet
+            </Button>
+          </VerbBlock>
+          
+          <div className="mt-auto pt-4">
             <Link 
               href="/map" 
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-semibold transition-colors"
+              className="block w-full text-left px-2.5 py-2 border border-nc-line-strong bg-nc-elev text-nc-ink text-xs font-medium hover:border-nc-ink-mute hover:bg-[#151820] transition-colors"
             >
-              🗺️ Texas Map View
+              Texas Map View
+              <span className="block text-[10px] text-nc-ink-mute font-mono mt-0.5">geographic visualization</span>
             </Link>
-            <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-              isRunning ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-400'
-            }`}>
-              {isRunning ? '● RUNNING' : '○ IDLE'}
-            </div>
           </div>
-        </header>
+        </aside>
 
-        {/* ERCOT Banner */}
-        <ErcotBanner data={ercotData} cachedData={cachedErcotData} />
+        {/* Center - Metrics + Dispatch + Devices */}
+        <main className="flex flex-col min-h-0 overflow-hidden">
+          {/* Metrics Row */}
+          <div className="grid grid-cols-6 border-b border-nc-line shrink-0">
+            <MetricCell label="Total Capacity" value={Math.round(metrics.totalCapacityKw)} unit="kW" />
+            <MetricCell label="Available" value={Math.round(metrics.availableCapacityKw)} unit="kW" />
+            <MetricCell label="Reserve Blocked" value={Math.round(metrics.reserveBlockedKw)} unit="kW" />
+            <MetricCell label="Online" value={metrics.devicesOnline} variant="online" />
+            <MetricCell label="Offline" value={metrics.devicesOffline} variant="offline" />
+            <MetricCell label="Target" value={Math.round(metrics.dispatchTargetKw)} unit="kW" last />
+          </div>
 
-        {/* Metrics Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          <MetricCard label="Total Capacity" value={metrics.totalCapacityKw} unit="kW" />
-          <MetricCard label="Available" value={metrics.availableCapacityKw} unit="kW" color="text-green-400" />
-          <MetricCard label="Reserve Blocked" value={metrics.reserveBlockedKw} unit="kW" color="text-yellow-400" />
-          <MetricCard label="Online" value={metrics.devicesOnline} color="text-green-400" />
-          <MetricCard label="Offline" value={metrics.devicesOffline} color="text-red-400" />
-          <MetricCard label="Target" value={metrics.dispatchTargetKw} unit="kW" color="text-blue-400" />
-        </div>
-
-        {/* Invariant Counters */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <MetricCard label="Delivered" value={metrics.deliveredKw} unit="kW" color="text-green-400" />
-          <MetricCard label="Pending Cmds" value={metrics.pendingCommands} color="text-yellow-400" />
-          <MetricCard label="Duplicates Ignored" value={metrics.duplicatesIgnored} color="text-purple-400" />
-          <MetricCard label="Stale Rejected" value={metrics.staleRejected} color="text-orange-400" />
-          <MetricCard label="Reallocations" value={metrics.reallocations} color="text-cyan-400" />
-        </div>
-
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Controls */}
-          <div className="space-y-4">
-            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-4">
-              <h2 className="font-semibold">Dispatch Control</h2>
-              <div>
-                <label className="text-sm text-slate-400">Target Power (kW)</label>
-                <input
-                  type="number"
-                  value={targetKw}
-                  onChange={(e) => setTargetKw(Number(e.target.value))}
-                  className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-white"
-                  min={0}
-                  max={1000}
+          {/* Dispatch Status + ERCOT Grid */}
+          <div className="grid grid-cols-2 border-b border-nc-line shrink-0">
+            <div className="p-3 border-r border-nc-line">
+              <div className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-bold mb-2">Dispatch Status</div>
+              <div className="flex items-baseline gap-3 mb-1.5">
+                <span className="font-mono text-[22px] font-semibold text-nc-num tabular-nums">
+                  {Math.round(metrics.deliveredKw)}<span className="text-nc-ink-mute font-normal"> / </span>{Math.round(metrics.dispatchTargetKw)}
+                </span>
+                <span className="font-mono text-sm text-nc-accent">{progressPct.toFixed(0)}%</span>
+              </div>
+              <div className="h-[3px] bg-nc-line-strong relative">
+                <div 
+                  className="absolute left-0 top-0 bottom-0 bg-nc-accent transition-all duration-300" 
+                  style={{ width: `${Math.min(100, progressPct)}%` }} 
                 />
               </div>
-              <button
-                onClick={handleDispatch}
-                disabled={loading || (activeDispatch?.status === 'executing')}
-                className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 rounded font-semibold transition-colors"
-              >
-                Start Dispatch
-              </button>
             </div>
-
-            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-4">
-              <h2 className="font-semibold">Fault Injection</h2>
-              <button
-                onClick={handleMassOutage}
-                className="w-full py-2 bg-red-800 hover:bg-red-700 rounded font-semibold"
-              >
-                Inject Mass Outage (10 devices)
-              </button>
-              <button
-                onClick={handleRestoreAll}
-                className="w-full py-2 bg-green-800 hover:bg-green-700 rounded font-semibold"
-              >
-                Restore All Devices
-              </button>
-            </div>
-
-            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-4">
-              <h2 className="font-semibold">Fleet Reset</h2>
-              <div>
-                <label className="text-sm text-slate-400">Device Count</label>
-                <select
-                  value={deviceCount}
-                  onChange={(e) => setDeviceCount(Number(e.target.value))}
-                  className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-white"
-                >
-                  <option value={50}>50 devices</option>
-                  <option value={100}>100 devices</option>
-                </select>
+            <div className="p-3 opacity-55">
+              <div className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-bold mb-2">
+                ERCOT Grid · Zone Alloc <span className="font-medium tracking-wider ml-1.5 opacity-70">SYNTHETIC</span>
               </div>
-              <button
-                onClick={handleReset}
-                className="w-full py-2 bg-slate-700 hover:bg-slate-600 rounded font-semibold"
-              >
-                Reset Fleet
-              </button>
+              <ErcotMiniGrid ercotData={ercotData} cachedData={cachedErcotData} />
             </div>
-
-            <DispatchStatus dispatch={activeDispatch} />
           </div>
 
-          {/* Device Grid */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-700 flex justify-between items-center">
-                <h2 className="font-semibold">Fleet Devices</h2>
-                <span className="text-sm text-slate-400">{devices.length} total</span>
-              </div>
-              <div className="p-3 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 max-h-96 overflow-y-auto">
-                {devices.map((device) => (
-                  <DeviceCard
-                    key={device.id}
-                    device={device}
-                    onInjectFault={handleInjectFault}
-                    onRestore={handleRestore}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <EventLog events={events} />
-            
-            <ZoneMap data={ercotData} events={events} />
+          {/* Devices Table */}
+          <div className="flex-1 p-3 overflow-auto min-h-0">
+            <div className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-bold mb-2">Fleet Devices · SOC / Avail</div>
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr>
+                  <th className="text-left text-[9px] tracking-wider uppercase text-nc-ink-mute font-bold pb-1.5 pr-2 border-b border-nc-line">Device</th>
+                  <th className="text-left text-[9px] tracking-wider uppercase text-nc-ink-mute font-bold pb-1.5 pr-2 border-b border-nc-line">Zone</th>
+                  <th className="text-left text-[9px] tracking-wider uppercase text-nc-ink-mute font-bold pb-1.5 pr-2 border-b border-nc-line">SOC</th>
+                  <th className="text-left text-[9px] tracking-wider uppercase text-nc-ink-mute font-bold pb-1.5 pr-2 border-b border-nc-line">Avail</th>
+                  <th className="text-left text-[9px] tracking-wider uppercase text-nc-ink-mute font-bold pb-1.5 pr-2 border-b border-nc-line">Status</th>
+                  <th className="text-left text-[9px] tracking-wider uppercase text-nc-ink-mute font-bold pb-1.5 border-b border-nc-line">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.slice(0, 20).map((device) => {
+                  const availablePower = Math.max(0, device.socPercent - device.reservePercent) / 100 * device.maxPowerKw;
+                  return (
+                    <tr key={device.id} className="hover:bg-[#12151a]">
+                      <td className="py-1.5 pr-2 border-b border-nc-line font-mono text-[11px] text-nc-ink tabular-nums">{device.name}</td>
+                      <td className="py-1.5 pr-2 border-b border-nc-line font-mono text-[11px] text-nc-ink">{device.zone}</td>
+                      <td className="py-1.5 pr-2 border-b border-nc-line font-mono text-[11px] text-nc-ink tabular-nums">{device.socPercent.toFixed(0)}%</td>
+                      <td className="py-1.5 pr-2 border-b border-nc-line font-mono text-[11px] text-nc-ink tabular-nums">{availablePower.toFixed(0)} kW</td>
+                      <td className={`py-1.5 pr-2 border-b border-nc-line font-mono text-[11px] ${device.status === 'online' ? 'text-nc-ok' : 'text-nc-bad'}`}>
+                        {device.status.toUpperCase()}
+                      </td>
+                      <td className="py-1.5 border-b border-nc-line">
+                        {device.status === 'online' ? (
+                          <button
+                            onClick={() => handleInjectFault(device.id, 'offline')}
+                            className="text-[10px] text-nc-ink-dim bg-transparent border border-nc-line px-1.5 py-0.5 hover:border-nc-ink-mute hover:text-nc-ink cursor-pointer"
+                          >
+                            offline
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleRestore(device.id)}
+                            className="text-[10px] text-nc-ink-dim bg-transparent border border-nc-line px-1.5 py-0.5 hover:border-nc-ink-mute hover:text-nc-ink cursor-pointer"
+                          >
+                            restore
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        </div>
+        </main>
 
-        {/* Footer */}
-        <footer className="text-center text-xs text-slate-600 py-4 border-t border-slate-800">
-          <p className="font-semibold text-slate-500">⚠️ SYNTHETIC DISCLAIMER</p>
-          <p>This is NOT Base proprietary architecture. All datasets, telemetry, and demo figures are synthetic unless a file explicitly states otherwise.</p>
-          <p className="mt-2">Base Power × AITX Hackathon — Orchestration + Open Grid Data Tracks</p>
-        </footer>
+        {/* Right Event Log */}
+        <aside className="border-l border-nc-line-strong bg-[#08090b] flex flex-col min-h-0">
+          <div className="px-3 py-2 border-b border-nc-line flex justify-between items-center shrink-0">
+            <h3 className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-bold">Event Log</h3>
+            <span className="font-mono text-[10px] text-nc-accent">● live</span>
+          </div>
+          <div className="flex-1 overflow-y-auto py-1.5 font-mono text-[11px] leading-relaxed">
+            {events.slice().reverse().slice(0, 50).map((event) => (
+              <div key={event.id} className="px-3 py-0.5 grid grid-cols-[64px_140px_1fr] gap-2 hover:bg-nc-panel">
+                <span className="text-nc-ink-mute">
+                  {new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+                </span>
+                <span className={`font-semibold ${eventColors[event.type] || 'text-nc-ink-dim'}`}>
+                  {event.type}
+                </span>
+                <span className="text-nc-ink-dim truncate">{formatEventMessage(event)}</span>
+              </div>
+            ))}
+            {events.length === 0 && (
+              <div className="text-nc-ink-mute text-center py-8">No events yet</div>
+            )}
+          </div>
+        </aside>
       </div>
-    </main>
+
+      {/* Footer - 28px */}
+      <footer className="h-7 border-t border-nc-line-strong bg-[#08090b] flex items-center px-4 text-[10px] tracking-wider text-nc-ink-mute font-mono uppercase shrink-0">
+        <strong className="text-nc-warn font-semibold mr-2">SYNTHETIC DISCLAIMER</strong>
+        Simulated ERCOT / fleet telemetry for hackathon demo only. Not connected to live grid or production devices.
+      </footer>
+    </div>
+  );
+}
+
+function ProofCell({ label, value, accent, warn, last }: { 
+  label: string; 
+  value: number; 
+  accent?: boolean; 
+  warn?: boolean;
+  last?: boolean;
+}) {
+  return (
+    <div className={`px-3.5 py-1.5 flex flex-col justify-center gap-0.5 ${!last ? 'border-r border-nc-line' : ''}`}>
+      <span className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-semibold">{label}</span>
+      <span className={`font-mono text-lg font-semibold tabular-nums ${
+        accent ? 'text-nc-accent' : warn ? 'text-nc-warn' : 'text-nc-num'
+      }`}>{value}</span>
+    </div>
+  );
+}
+
+function MetricCell({ label, value, unit, variant, last }: {
+  label: string;
+  value: number;
+  unit?: string;
+  variant?: 'online' | 'offline';
+  last?: boolean;
+}) {
+  return (
+    <div className={`p-3 ${!last ? 'border-r border-nc-line' : ''}`}>
+      <div className="text-[9px] tracking-wider uppercase text-nc-ink-mute mb-0.5">{label}</div>
+      <div className={`font-mono text-[15px] font-semibold tabular-nums ${
+        variant === 'online' ? 'text-nc-ok' : variant === 'offline' ? 'text-nc-bad' : 'text-nc-num'
+      }`}>
+        {value}
+        {unit && <span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+function VerbBlock({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h3 className="text-[9px] tracking-widest uppercase text-nc-ink-mute font-bold mb-2">{title}</h3>
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-2">
+      <label className="block text-[10px] text-nc-ink-dim mb-0.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function Button({ 
+  children, 
+  variant = 'default', 
+  onClick, 
+  disabled,
+  hint 
+}: { 
+  children: React.ReactNode;
+  variant?: 'default' | 'primary' | 'danger' | 'ok' | 'ghost';
+  onClick?: () => void;
+  disabled?: boolean;
+  hint?: string;
+}) {
+  const variantStyles = {
+    default: 'border-nc-line-strong text-nc-ink bg-nc-elev hover:border-nc-ink-mute hover:bg-[#151820]',
+    primary: 'border-nc-accent-dim text-nc-accent bg-[#161208] hover:bg-[#1e180a]',
+    danger: 'border-[#5a2828] text-[#e07070] hover:bg-[#1a1010]',
+    ok: 'border-[#1e4a32] text-nc-ok hover:bg-[#0a1810]',
+    ghost: 'border-nc-line-strong border-dashed text-nc-ink-dim hover:text-nc-ink',
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`block w-full text-left px-2.5 py-2 border text-xs font-medium cursor-pointer transition-colors ${variantStyles[variant]} ${
+        disabled ? 'opacity-50 cursor-not-allowed' : ''
+      }`}
+    >
+      {children}
+      {hint && <span className="block text-[10px] font-normal text-nc-ink-mute font-mono mt-0.5">{hint}</span>}
+    </button>
+  );
+}
+
+function Divider() {
+  return <div className="h-px bg-nc-line my-1" />;
+}
+
+function ErcotMiniGrid({ ercotData, cachedData }: { ercotData: ErcotData | null; cachedData: ErcotCacheData | null }) {
+  if (cachedData?.gridSummary) {
+    const { gridSummary } = cachedData;
+    return (
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11px] text-nc-ink-dim">
+        <div>P1 load <strong className="text-nc-ink font-medium">{(gridSummary.totalLoadMw / 1000).toFixed(2)} GW</strong></div>
+        <div>freq <strong className="text-nc-ink font-medium">{gridSummary.frequencyHz.toFixed(2)} Hz</strong></div>
+        <div>North <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.35 / 10)} kW</strong></div>
+        <div>South <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.28 / 10)} kW</strong></div>
+        <div>West <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.19 / 10)} kW</strong></div>
+        <div>Houston <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.18 / 10)} kW</strong></div>
+      </div>
+    );
+  }
+
+  if (ercotData?.gridStatus) {
+    const { gridStatus } = ercotData;
+    return (
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11px] text-nc-ink-dim">
+        <div>P1 load <strong className="text-nc-ink font-medium">{(gridStatus.totalLoadMw / 1000).toFixed(2)} GW</strong></div>
+        <div>freq <strong className="text-nc-ink font-medium">59.97 Hz</strong></div>
+        <div>North <strong className="text-nc-ink font-medium">118 kW</strong></div>
+        <div>South <strong className="text-nc-ink font-medium">94 kW</strong></div>
+        <div>West <strong className="text-nc-ink font-medium">62 kW</strong></div>
+        <div>Houston <strong className="text-nc-ink font-medium">38 kW</strong></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11px] text-nc-ink-dim">
+      <div>P1 load <strong className="text-nc-ink font-medium">1.42 GW</strong></div>
+      <div>freq <strong className="text-nc-ink font-medium">59.97 Hz</strong></div>
+      <div>North <strong className="text-nc-ink font-medium">118 kW</strong></div>
+      <div>South <strong className="text-nc-ink font-medium">94 kW</strong></div>
+      <div>West <strong className="text-nc-ink font-medium">62 kW</strong></div>
+      <div>Houston <strong className="text-nc-ink font-medium">38 kW</strong></div>
+    </div>
   );
 }

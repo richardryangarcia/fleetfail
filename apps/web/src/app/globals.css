@@ -3,36 +3,45 @@
 @tailwind utilities;
 
 :root {
-  --foreground: #0a0a0a;
-  --background: #fafafa;
+  --bg: #0a0b0d;
+  --bg-elev: #111318;
+  --bg-panel: #0e1014;
+  --line: #1e2229;
+  --line-strong: #2a3038;
+  --ink: #c8ced6;
+  --ink-dim: #6b7380;
+  --ink-mute: #4a5260;
+  --num: #e8edf2;
+  --accent: #f0a020;
+  --accent-dim: #a87018;
+  --ok: #3dba7a;
+  --warn: #e8a020;
+  --bad: #e05454;
+  --idle: #5a6270;
+  --mono: "SF Mono", "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground: #ededed;
-    --background: #0a0a0a;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@layer utilities {
-  .grid-pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
+.font-mono {
+  font-family: var(--mono);
 }
 
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Leaflet MarkerCluster CSS (inlined to avoid module resolution issues) */
