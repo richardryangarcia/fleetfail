@@ -86,7 +86,8 @@ export type CommandStatus =
   | 'stale_rejected'
   | 'duplicate_ignored'
   | 'device_offline'
-  | 'expired';
+  | 'expired'
+  | 'reallocated';
 
 export interface Dispatch {
   id: string;

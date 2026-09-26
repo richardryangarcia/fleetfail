@@ -125,11 +125,13 @@ export function MapSideStrip({
           <>
             <div className="flex items-baseline gap-3 mb-1">
               <span className="text-xl font-mono font-semibold text-nc-num tabular-nums">
+                <span className="text-nc-ink-mute text-xs font-normal mr-1">Delivered</span>
                 {dispatch.deliveredKw.toFixed(0)}
                 <span className="text-nc-ink-mute font-normal"> / </span>
+                <span className="text-nc-ink-mute text-xs font-normal mr-1">Target</span>
                 {dispatch.targetKw.toFixed(0)}
               </span>
-              <span className="text-sm font-mono text-nc-accent">{progressPct.toFixed(0)}%</span>
+              <span className="text-sm font-mono text-nc-accent">{Math.min(100, progressPct).toFixed(0)}%</span>
             </div>
             <div className="h-[3px] bg-nc-line-strong relative">
               <div 

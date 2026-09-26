@@ -38,6 +38,7 @@ export {
   markDuplicateIgnored,
   markDeviceOffline,
   markExpired,
+  markReallocated,
   isCommandExpired,
   shouldRetry,
   validateCommand,

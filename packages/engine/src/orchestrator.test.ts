@@ -393,6 +393,88 @@ describe('FleetFail P0 Kill Gate Tests', () => {
     });
   });
 
+  describe('Reallocation Loop Protection (P0 Fix)', () => {
+    it('marks reallocated commands as terminal to prevent infinite loop', () => {
+      const devices = orchestrator.getDevices();
+      
+      for (const device of devices.slice(0, 5)) {
+        orchestrator.injectFault({
+          deviceId: device.id,
+          faultType: 'lost_ack',
+          durationMs: 100000,
+        });
+      }
+      
+      orchestrator.startDispatch(100);
+      
+      for (let i = 0; i < 60; i++) {
+        orchestrator.tick();
+      }
+      
+      const commands = orchestrator.getCommands();
+      const reallocatedCommands = commands.filter(c => c.status === 'reallocated');
+      const exhaustedTimeouts = commands.filter(
+        c => c.status === 'timeout' && c.attemptCount >= 3
+      );
+      
+      expect(exhaustedTimeouts.length).toBe(0);
+      expect(reallocatedCommands.length).toBeGreaterThan(0);
+    });
+
+    it('delivered power never exceeds target (capped at 100%)', () => {
+      orchestrator.startDispatch(100);
+      orchestrator.runUntilComplete(50);
+      
+      const dispatch = orchestrator.getActiveDispatch()!;
+      
+      expect(dispatch.deliveredKw).toBeLessThanOrEqual(dispatch.targetKw);
+      
+      const progressPct = (dispatch.deliveredKw / dispatch.targetKw) * 100;
+      expect(progressPct).toBeLessThanOrEqual(100);
+    });
+
+    it('dispatch completes even with exhausted timeout commands', () => {
+      const devices = orchestrator.getDevices();
+      
+      for (const device of devices.slice(0, 5)) {
+        orchestrator.injectFault({
+          deviceId: device.id,
+          faultType: 'lost_ack',
+          durationMs: 100000,
+        });
+      }
+      
+      orchestrator.startDispatch(100);
+      
+      const ticks = orchestrator.runUntilComplete(200);
+      
+      const dispatch = orchestrator.getActiveDispatch()!;
+      expect(dispatch.status).not.toBe('executing');
+      expect(ticks).toBeLessThan(200);
+    });
+
+    it('reallocation only happens once per failed command', () => {
+      const devices = orchestrator.getDevices();
+      const targetDevice = devices[0]!;
+      
+      orchestrator.injectFault({ deviceId: targetDevice.id, faultType: 'offline' });
+      
+      orchestrator.startDispatch(50);
+      
+      for (let i = 0; i < 30; i++) {
+        orchestrator.tick();
+      }
+      
+      const events = orchestrator.getEvents();
+      const reallocatedFromTarget = events.filter(
+        e => e.type === 'REALLOCATED' && 
+             (e.details as { fromDeviceId: string }).fromDeviceId === targetDevice.id
+      );
+      
+      expect(reallocatedFromTarget.length).toBeLessThanOrEqual(1);
+    });
+  });
+
   describe('Insufficient Capacity / Shortfall', () => {
     it('detects INSUFFICIENT_CAPACITY when target exceeds fleet capacity', () => {
       const metrics = orchestrator.getMetrics();

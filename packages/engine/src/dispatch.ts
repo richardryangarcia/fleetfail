@@ -28,9 +28,10 @@ export function updateDispatchAllocation(
 }
 
 export function addDeliveredPower(dispatch: Dispatch, kw: number): Dispatch {
+  const newDelivered = dispatch.deliveredKw + kw;
   return {
     ...dispatch,
-    deliveredKw: dispatch.deliveredKw + kw,
+    deliveredKw: Math.min(newDelivered, dispatch.targetKw),
   };
 }
 
