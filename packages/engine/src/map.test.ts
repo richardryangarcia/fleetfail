@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from './orchestrator.js';
-import { ERCOT_ZONES } from './ercot.js';
+import { ERCOT_ZONES, ALL_ZONES, IL_ZONES } from './ercot.js';
 import { 
   generateErcotCacheSnapshot, 
   getErcotCache, 
@@ -25,21 +25,28 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
   });
 
   describe('Zone Clustering - Device Positions', () => {
-    it('all devices have lat/lng within reasonable Texas bounds', () => {
+    it('all devices have lat/lng within reasonable TX/IL bounds', () => {
       const devices = orchestrator.getDevices();
       
       for (const device of devices) {
-        expect(device.latitude).toBeGreaterThan(25);
-        expect(device.latitude).toBeLessThan(37);
-        expect(device.longitude).toBeGreaterThan(-107);
-        expect(device.longitude).toBeLessThan(-93);
+        if (device.region === 'TX') {
+          expect(device.latitude).toBeGreaterThan(25);
+          expect(device.latitude).toBeLessThan(37);
+          expect(device.longitude).toBeGreaterThan(-107);
+          expect(device.longitude).toBeLessThan(-93);
+        } else if (device.region === 'IL') {
+          expect(device.latitude).toBeGreaterThan(36);
+          expect(device.latitude).toBeLessThan(43);
+          expect(device.longitude).toBeGreaterThan(-92);
+          expect(device.longitude).toBeLessThan(-86);
+        }
       }
     });
 
     it('devices are clustered near their zone centroids', () => {
       const devices = orchestrator.getDevices();
       
-      for (const zone of ERCOT_ZONES) {
+      for (const zone of ALL_ZONES) {
         const zoneDevices = devices.filter(d => d.zone === zone.id);
         
         if (zoneDevices.length === 0) continue;
@@ -70,14 +77,42 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
       }
     });
 
-    it('devices are distributed across multiple zones', () => {
+    it('devices are distributed across multiple zones (TX and IL)', () => {
       const devices = orchestrator.getDevices();
       const zones = new Set(devices.map(d => d.zone));
+      const regions = new Set(devices.map(d => d.region));
       
       expect(zones.size).toBeGreaterThanOrEqual(5);
+      expect(regions.size).toBe(2);
+      expect(regions.has('TX')).toBe(true);
+      expect(regions.has('IL')).toBe(true);
     });
 
-    it('no devices are in the Gulf of Mexico (water check)', () => {
+    it('TX/IL distribution is roughly 70/30', () => {
+      const devices = orchestrator.getDevices();
+      const txCount = devices.filter(d => d.region === 'TX').length;
+      const ilCount = devices.filter(d => d.region === 'IL').length;
+      
+      const txRatio = txCount / devices.length;
+      expect(txRatio).toBeGreaterThan(0.5);
+      expect(txRatio).toBeLessThan(0.9);
+    });
+
+    it('devices have correct generation specs', () => {
+      const devices = orchestrator.getDevices();
+      
+      for (const device of devices) {
+        if (device.generation === 'gen1') {
+          expect(device.maxPowerKw).toBe(25);
+          expect(device.capacityKwh).toBe(50);
+        } else if (device.generation === 'gen3') {
+          expect(device.maxPowerKw).toBe(40);
+          expect(device.capacityKwh).toBe(80);
+        }
+      }
+    });
+
+    it('no TX devices are in the Gulf of Mexico (water check)', () => {
       const isInGulf = (lat: number, lng: number): boolean => {
         if (lng > -94.0) return true;
         if (lat < 26.0) return true;
@@ -92,7 +127,8 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
         testOrch.seedFleet(100, 0);
         const devices = testOrch.getDevices();
         
-        for (const device of devices) {
+        const txDevices = devices.filter(d => d.region === 'TX');
+        for (const device of txDevices) {
           const inGulf = isInGulf(device.latitude, device.longitude);
           expect(inGulf, `Device ${device.name} at [${device.latitude}, ${device.longitude}] is in Gulf`).toBe(false);
         }
@@ -305,6 +341,55 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
         const metrics = testOrch.getMetrics();
         expect(metrics.availableCapacityKw).toBeGreaterThan(400);
       }
+    });
+  });
+
+  describe('20k Device Scale', () => {
+    it('can seed 20,000 devices efficiently', () => {
+      const startTime = Date.now();
+      const largeOrch = new Orchestrator({ seed: 42 });
+      largeOrch.seedFleet(20000, 0);
+      const elapsed = Date.now() - startTime;
+      
+      const devices = largeOrch.getDevices();
+      expect(devices.length).toBe(20000);
+      expect(elapsed).toBeLessThan(5000);
+    });
+
+    it('20k fleet has proper TX/IL distribution', () => {
+      const largeOrch = new Orchestrator({ seed: 42 });
+      largeOrch.seedFleet(20000, 0);
+      
+      const devices = largeOrch.getDevices();
+      const txCount = devices.filter(d => d.region === 'TX').length;
+      const ilCount = devices.filter(d => d.region === 'IL').length;
+      
+      expect(txCount).toBeGreaterThan(12000);
+      expect(txCount).toBeLessThan(16000);
+      expect(ilCount).toBeGreaterThan(4000);
+      expect(ilCount).toBeLessThan(8000);
+    });
+
+    it('20k fleet has mixed Gen1/Gen3 devices', () => {
+      const largeOrch = new Orchestrator({ seed: 42 });
+      largeOrch.seedFleet(20000, 0);
+      
+      const devices = largeOrch.getDevices();
+      const gen1Count = devices.filter(d => d.generation === 'gen1').length;
+      const gen3Count = devices.filter(d => d.generation === 'gen3').length;
+      
+      expect(gen1Count).toBeGreaterThan(8000);
+      expect(gen3Count).toBeGreaterThan(5000);
+    });
+
+    it('20k fleet has devices across all zones', () => {
+      const largeOrch = new Orchestrator({ seed: 42 });
+      largeOrch.seedFleet(20000, 0);
+      
+      const devices = largeOrch.getDevices();
+      const zones = new Set(devices.map(d => d.zone));
+      
+      expect(zones.size).toBe(ALL_ZONES.length);
     });
   });
 

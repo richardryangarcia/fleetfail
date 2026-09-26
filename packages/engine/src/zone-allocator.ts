@@ -1,9 +1,9 @@
 import type { Device } from './types.js';
 import { getAvailablePowerKw } from './device.js';
-import { ERCOT_ZONES, type ErcotZone } from './ercot.js';
+import { ALL_ZONES, type GridZone } from './ercot.js';
 
 export interface ZoneAllocation {
-  zone: ErcotZone;
+  zone: GridZone;
   devices: Device[];
   totalCapacityKw: number;
   availableCapacityKw: number;
@@ -12,7 +12,8 @@ export interface ZoneAllocation {
 }
 
 /**
- * Groups devices by their zone and calculates zone-level capacity
+ * Groups devices by their zone and calculates zone-level capacity.
+ * Supports both TX (ERCOT) and IL (MISO) zones.
  */
 export function getZoneAllocations(devices: Device[]): ZoneAllocation[] {
   const zoneMap = new Map<string, Device[]>();
@@ -23,7 +24,7 @@ export function getZoneAllocations(devices: Device[]): ZoneAllocation[] {
     zoneMap.set(device.zone, existing);
   }
   
-  return ERCOT_ZONES.map(zone => {
+  return ALL_ZONES.map(zone => {
     const zoneDevices = zoneMap.get(zone.id) ?? [];
     const online = zoneDevices.filter(d => d.status === 'online');
     const offline = zoneDevices.filter(d => d.status !== 'online');
@@ -70,13 +71,14 @@ export function sortDevicesByZonePreference(
 }
 
 /**
- * Creates default zone preferences based on net load
- * Zones with higher net load get higher priority (more need for DR)
+ * Creates default zone preferences based on net load.
+ * Zones with higher net load get higher priority (more need for DR).
+ * Supports both TX (ERCOT) and IL (MISO) zones.
  */
 export function createLoadBasedPreferences(): ZonePreference[] {
-  const maxLoad = Math.max(...ERCOT_ZONES.map(z => z.netLoadMw));
+  const maxLoad = Math.max(...ALL_ZONES.map(z => z.netLoadMw));
   
-  return ERCOT_ZONES.map(zone => ({
+  return ALL_ZONES.map(zone => ({
     zoneId: zone.id,
     weight: zone.netLoadMw / maxLoad,
   }));

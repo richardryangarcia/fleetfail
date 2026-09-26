@@ -52,7 +52,7 @@ export function MapSideStrip({
           </Link>
         </div>
         <p className="text-xs text-slate-500 mt-1">
-          Texas Weather Zone Clusters
+          TX (ERCOT) + IL (MISO) Fleet
         </p>
       </div>
 

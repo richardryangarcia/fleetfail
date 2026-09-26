@@ -6,13 +6,36 @@
 
 ## ⚠️ SYNTHETIC DISCLAIMER
 
-**This is NOT Base proprietary architecture.** All datasets, telemetry, and demo figures are **synthetic** unless a file explicitly states otherwise. The ERCOT zone data, device characteristics, and grid metrics are fabricated for demonstration purposes only.
+**This is NOT Base proprietary architecture.** All datasets, telemetry, and demo figures are **synthetic** unless a file explicitly states otherwise. Device positions are deterministically seeded for demonstration purposes.
 
-### Texas Map View
+### Fleet Map View
 
-The `/map` page displays ~50-100 synthetic battery devices clustered by ERCOT weather zone. **These markers represent synthetic zone clusters, NOT real Base installations.** Device positions are deterministically seeded around zone centroids for demonstration purposes.
+The `/map` page displays **~20,000 synthetic battery devices** across Texas (ERCOT) and Illinois (MISO) regions. **These markers represent synthetic zone clusters, NOT real Base installations.** Device positions are seeded around zone centroids.
+
+**Fleet Distribution:**
+- **Texas (ERCOT):** 70% of devices across 8 weather zones
+- **Illinois (MISO):** 30% of devices across 4 load zones
+- **Gen1 Devices:** 25kW / 50kWh (60% of fleet)
+- **Gen3 Devices:** 40kW / 80kWh (40% of fleet)
+
+**Map Features:**
+- Leaflet.markercluster for efficient 20k device rendering
+- Cluster aggregation at zoom-out, individual markers at zoom-in
+- Viewport-based API serving (does not dump 20k per poll)
 
 **Basemap**: OpenStreetMap (no API key required).
+
+### Grid Data Sources
+
+**ERCOT Fixture (Real Cached Data)**
+- **Source:** ERCOT Grid Operations Dashboard (https://www.ercot.com/gridmktinfo/dashboards)
+- **Capture:** September 2024 snapshot, afternoon peak period
+- **Data:** Weather-zone load, wind/solar generation, temperature, net load
+- **Label:** "Cached / Replay (ERCOT Sep 2024)"
+
+**Illinois Zones (Synthetic)**
+- **Structure:** Based on MISO Zone 4/6 geography
+- **Data:** Synthetic load values for demonstration
 
 ---
 
@@ -152,15 +175,18 @@ pnpm test
 
 ## P1 Features (Implemented)
 
-- ✅ **ERCOT Weather Zone Fixture**: Synthetic zone data with net load, temperature, wind/solar generation
-- ✅ **Zone-Preference Allocator**: Sort devices by zone weight for geographic dispatch preference
-- ✅ **Zone Activity Map**: Visual indicator of event activity by zone from event log
-- ✅ **Texas Map View** (`/map`): Interactive Leaflet map with ~50-100 devices clustered by ERCOT weather zone
+- ✅ **20k Device Scale**: ~20,000 devices across Texas and Illinois with efficient in-memory management
+- ✅ **TX + IL Geography**: 70% Texas (8 ERCOT zones), 30% Illinois (4 MISO zones)
+- ✅ **Gen1/Gen3 Devices**: Gen1 (25kW/50kWh) and Gen3 (40kW/80kWh) battery generations
+- ✅ **Map Clustering**: Leaflet.markercluster for 20k device rendering without 20k DOM markers
+- ✅ **Viewport API**: `/api/state?minLat=...&maxLat=...&minLng=...&maxLng=...` returns only viewport devices
+- ✅ **Real ERCOT Fixture**: Cached ERCOT data from September 2024 (documented source in `ercot-fixture.ts`)
+- ✅ **Fleet Map View** (`/map`): Interactive Leaflet map with device clusters and individual markers at zoom-in
 - ✅ **Click-to-Offline**: Click any device marker on the map to take it offline through the real fault/command path
 - ✅ **Reallocation Visuals**: Devices receiving reallocated power pulse/glow with rising kW driven by real `REALLOCATED` and `COMMAND_ACKED` events
 - ✅ **Zone Mass Outage**: Click zone name in side strip to trigger mass outage for that zone's devices
-- ✅ **ERCOT Cache**: Cached real ERCOT weather-zone load + wind/solar net-load outlook with "Cached / Replay" label
-- ✅ **Side Strip Metrics**: Always-visible panel showing Target vs Delivered, Online/Offline counts, Duplicates Ignored, Stale Rejected
+- ✅ **Zone-Preference Allocator**: Sort devices by zone weight for geographic dispatch preference
+- ✅ **Side Strip Metrics**: Always-visible panel showing Target vs Delivered, Online/Offline counts, Device Summary
 
 ## P2 Features (Not Implemented)
 
@@ -214,20 +240,21 @@ Default orchestrator config (`packages/engine/src/types.ts`):
    - Dispatch converges to target
 8. Check metrics: duplicates ignored, stale rejected, reallocations all tracked
 
-### Texas Map View (`/map`)
+### Fleet Map View (`/map`)
 
-1. Open http://localhost:43210/map or click "Texas Map View" from ops console
-2. View ~50-100 synthetic devices clustered by ERCOT weather zone on the Texas map
-3. Start a 400kW dispatch from the side strip
-4. **Click a battery marker** to take that device offline (uses real fault/command path)
-5. Observe:
+1. Open http://localhost:43210/map or click "Fleet Map View" from ops console
+2. View ~20,000 synthetic devices clustered across TX (ERCOT) and IL (MISO) regions
+3. Map uses Leaflet.markercluster - zoom out to see clusters, zoom in to see individual devices
+4. Start a 400kW dispatch from the side strip
+5. **Zoom in and click a device marker** to take it offline (uses real fault/command path)
+6. Observe:
    - Device turns red and offline on the map
    - `DEVICE_OFFLINE` event emitted
    - Surviving devices pulse/glow brighter (working harder)
    - Side strip shows rising `Reallocations` count
-6. Click zone name in side strip to trigger mass outage for that zone
-7. Side strip always shows: Target vs Delivered, Online/Offline, Duplicates Ignored, Stale Rejected
-8. ERCOT banner shows "Cached / Replay" label with cached zone load data
+7. Click zone name in side strip to trigger mass outage for that zone
+8. Side strip shows: Target vs Delivered, Online/Offline counts, Fleet summary by region
+9. ERCOT banner shows "Cached / Replay (ERCOT Sep 2024)" with real cached zone load data
 
 ## Technical Decisions
 
