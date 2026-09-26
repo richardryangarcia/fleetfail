@@ -32,6 +32,7 @@ import {
 import * as events from './event.js';
 import { FaultInjector, type FaultConfig, type ActiveFault } from './fault-injection.js';
 import { SeededRandom } from './random.js';
+import { sortDevicesByZonePreference, type ZonePreference } from './zone-allocator.js';
 
 export interface OrchestratorState {
   devices: Map<string, Device>;
@@ -56,6 +57,7 @@ export class Orchestrator {
   private faultInjector: FaultInjector;
   private rng: SeededRandom;
   private sequenceCounter: Map<string, number> = new Map();
+  private zonePreferences: ZonePreference[] = [];
   
   private metrics: {
     duplicatesIgnored: number;
@@ -86,6 +88,14 @@ export class Orchestrator {
       currentTime: 0,
       activeDispatchId: null,
     };
+  }
+
+  setZonePreferences(preferences: ZonePreference[]): void {
+    this.zonePreferences = preferences;
+  }
+
+  getZonePreferences(): ZonePreference[] {
+    return [...this.zonePreferences];
   }
 
   seedFleet(count: number, startTime: number = 0): void {
@@ -265,9 +275,14 @@ export class Orchestrator {
     targetKw: number,
     excludeDevices: Set<string> = new Set()
   ): { allocatedKw: number; commandIds: string[]; deviceCount: number } {
-    const onlineDevices = this.getDevices()
-      .filter(d => d.status === 'online' && !excludeDevices.has(d.id))
-      .sort((a, b) => getAvailablePowerKw(b) - getAvailablePowerKw(a));
+    let onlineDevices = this.getDevices()
+      .filter(d => d.status === 'online' && !excludeDevices.has(d.id));
+    
+    if (this.zonePreferences.length > 0) {
+      onlineDevices = sortDevicesByZonePreference(onlineDevices, this.zonePreferences);
+    } else {
+      onlineDevices = onlineDevices.sort((a, b) => getAvailablePowerKw(b) - getAvailablePowerKw(a));
+    }
     
     let remaining = targetKw;
     const commandIds: string[] = [];
