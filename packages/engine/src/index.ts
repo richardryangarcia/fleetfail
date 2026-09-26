@@ -83,6 +83,7 @@ export {
   getGridStatus,
   type ErcotZone,
   type GridStatus,
+  type ZoneBounds,
 } from './ercot.js';
 
 // ERCOT cached real data

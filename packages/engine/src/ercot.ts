@@ -20,7 +20,14 @@ export interface ErcotZone {
   centroid: [number, number];
 }
 
-export const ERCOT_ZONES: ErcotZone[] = [
+export interface ZoneBounds {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+}
+
+export const ERCOT_ZONES: (ErcotZone & { bounds: ZoneBounds })[] = [
   {
     id: 'COAST',
     name: 'Coast',
@@ -28,7 +35,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 82,
     windMw: 1200,
     solarMw: 450,
-    centroid: [29.0, -95.5],
+    centroid: [29.8, -96.0],
+    bounds: { minLat: 29.2, maxLat: 30.5, minLng: -97.0, maxLng: -95.0 },
   },
   {
     id: 'EAST',
@@ -38,6 +46,7 @@ export const ERCOT_ZONES: ErcotZone[] = [
     windMw: 800,
     solarMw: 380,
     centroid: [32.0, -95.0],
+    bounds: { minLat: 31.0, maxLat: 33.5, minLng: -96.0, maxLng: -94.0 },
   },
   {
     id: 'FAR_WEST',
@@ -46,7 +55,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 95,
     windMw: 4500,
     solarMw: 1200,
-    centroid: [31.5, -103.0],
+    centroid: [31.5, -103.5],
+    bounds: { minLat: 30.5, maxLat: 32.5, minLng: -104.5, maxLng: -102.5 },
   },
   {
     id: 'NORTH',
@@ -55,7 +65,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 76,
     windMw: 2200,
     solarMw: 320,
-    centroid: [33.5, -97.0],
+    centroid: [33.5, -97.5],
+    bounds: { minLat: 33.0, maxLat: 34.5, minLng: -98.5, maxLng: -96.5 },
   },
   {
     id: 'NORTH_C',
@@ -64,7 +75,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 79,
     windMw: 1800,
     solarMw: 560,
-    centroid: [32.8, -96.8],
+    centroid: [32.8, -97.0],
+    bounds: { minLat: 32.0, maxLat: 33.5, minLng: -98.0, maxLng: -96.0 },
   },
   {
     id: 'SOUTH_C',
@@ -73,7 +85,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 84,
     windMw: 1500,
     solarMw: 680,
-    centroid: [29.8, -98.5],
+    centroid: [29.5, -98.5],
+    bounds: { minLat: 28.8, maxLat: 30.5, minLng: -99.5, maxLng: -97.5 },
   },
   {
     id: 'SOUTHERN',
@@ -82,7 +95,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 86,
     windMw: 900,
     solarMw: 520,
-    centroid: [27.5, -97.5],
+    centroid: [27.8, -98.5],
+    bounds: { minLat: 26.5, maxLat: 28.5, minLng: -99.5, maxLng: -97.5 },
   },
   {
     id: 'WEST',
@@ -91,7 +105,8 @@ export const ERCOT_ZONES: ErcotZone[] = [
     temperatureF: 91,
     windMw: 3800,
     solarMw: 950,
-    centroid: [31.0, -100.0],
+    centroid: [31.0, -100.5],
+    bounds: { minLat: 30.0, maxLat: 32.5, minLng: -102.0, maxLng: -99.0 },
   },
 ];
 

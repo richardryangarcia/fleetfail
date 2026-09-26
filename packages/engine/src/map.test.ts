@@ -76,6 +76,41 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
       
       expect(zones.size).toBeGreaterThanOrEqual(5);
     });
+
+    it('no devices are in the Gulf of Mexico (water check)', () => {
+      const isInGulf = (lat: number, lng: number): boolean => {
+        if (lng > -94.0) return true;
+        if (lat < 26.0) return true;
+        if (lat < 27.5 && lng > -97.0) return true;
+        if (lat < 28.5 && lng > -96.0) return true;
+        if (lat < 29.5 && lng > -95.0) return true;
+        return false;
+      };
+
+      for (let seed = 1; seed <= 10; seed++) {
+        const testOrch = new Orchestrator({ seed });
+        testOrch.seedFleet(100, 0);
+        const devices = testOrch.getDevices();
+        
+        for (const device of devices) {
+          const inGulf = isInGulf(device.latitude, device.longitude);
+          expect(inGulf, `Device ${device.name} at [${device.latitude}, ${device.longitude}] is in Gulf`).toBe(false);
+        }
+      }
+    });
+
+    it('COAST and SOUTHERN zone devices are inland', () => {
+      const coastDevices = orchestrator.getDevices().filter(d => d.zone === 'COAST');
+      const southernDevices = orchestrator.getDevices().filter(d => d.zone === 'SOUTHERN');
+      
+      for (const device of coastDevices) {
+        expect(device.longitude).toBeLessThan(-95.0);
+      }
+      
+      for (const device of southernDevices) {
+        expect(device.longitude).toBeLessThan(-97.0);
+      }
+    });
   });
 
   describe('Click-Offline via Fault Injection Path', () => {
