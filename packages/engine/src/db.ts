@@ -1,10 +1,14 @@
 import Database from 'better-sqlite3';
 import type { Command, Dispatch, FleetEvent, Device, DeviceRegion, DeviceGeneration } from './types.js';
+import type { ErcotCacheData, ErcotDataSource } from './ercot-cache.js';
+import type { PriceCacheData } from './ercot-prices.js';
 
 export interface DbConfig {
   path: string;
   inMemory?: boolean;
 }
+
+export type ErcotSnapshotType = 'grid' | 'prices';
 
 export class FleetDb {
   private db: Database.Database;
@@ -84,6 +88,17 @@ export class FleetDb {
       CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
       CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
       CREATE INDEX IF NOT EXISTS idx_events_dispatch ON events(dispatch_id);
+
+      -- ERCOT last-good snapshots: stores successfully fetched live data
+      -- for fallback when live API is rate-limited or unavailable
+      -- For 'grid' type, cache_key is just 'grid'
+      -- For 'prices' type, cache_key is 'prices:{settlementPoint}'
+      CREATE TABLE IF NOT EXISTS ercot_last_good (
+        cache_key TEXT PRIMARY KEY,
+        type TEXT NOT NULL,     -- 'grid' or 'prices'
+        data TEXT NOT NULL,     -- JSON-serialized ErcotCacheData or PriceCacheData
+        captured_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -425,6 +440,91 @@ export class FleetDb {
     }));
   }
 
+  /**
+   * Save last-good ERCOT grid data snapshot.
+   * Called on successful live fetch to preserve for fallback.
+   */
+  saveLastGoodGrid(data: ErcotCacheData): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO ercot_last_good (cache_key, type, data, captured_at)
+      VALUES ('grid', 'grid', ?, ?)
+    `);
+    stmt.run(JSON.stringify(data), Date.now());
+  }
+
+  /**
+   * Load last-good ERCOT grid data snapshot.
+   * Returns null if no snapshot exists.
+   */
+  loadLastGoodGrid(): ErcotCacheData | null {
+    const row = this.db.prepare(`
+      SELECT data, captured_at FROM ercot_last_good WHERE cache_key = 'grid'
+    `).get() as { data: string; captured_at: number } | undefined;
+    
+    if (!row) return null;
+    
+    const parsed = JSON.parse(row.data) as ErcotCacheData;
+    return {
+      ...parsed,
+      dataSource: 'cached' as ErcotDataSource,
+      cacheLabel: 'Cached / Replay — Live ERCOT unavailable',
+    };
+  }
+
+  /**
+   * Save last-good ERCOT price data snapshot.
+   * Called on successful live fetch to preserve for fallback.
+   * Each settlement point is stored separately.
+   */
+  saveLastGoodPrices(data: PriceCacheData): void {
+    const cacheKey = `prices:${data.settlementPoint}`;
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO ercot_last_good (cache_key, type, data, captured_at)
+      VALUES (?, 'prices', ?, ?)
+    `);
+    stmt.run(cacheKey, JSON.stringify(data), Date.now());
+  }
+
+  /**
+   * Load last-good ERCOT price data snapshot.
+   * Returns null if no snapshot exists for the given settlement point.
+   */
+  loadLastGoodPrices(settlementPoint: string): PriceCacheData | null {
+    const cacheKey = `prices:${settlementPoint}`;
+    const row = this.db.prepare(`
+      SELECT data, captured_at FROM ercot_last_good WHERE cache_key = ?
+    `).get(cacheKey) as { data: string; captured_at: number } | undefined;
+    
+    if (!row) return null;
+    
+    const parsed = JSON.parse(row.data) as PriceCacheData;
+    return {
+      ...parsed,
+      dataSource: 'cached' as ErcotDataSource,
+    };
+  }
+
+  /**
+   * Check if we have a last-good snapshot available.
+   */
+  hasLastGoodGrid(): boolean {
+    const row = this.db.prepare(`
+      SELECT 1 FROM ercot_last_good WHERE cache_key = 'grid'
+    `).get();
+    return !!row;
+  }
+
+  /**
+   * Check if we have last-good price data for a settlement point.
+   */
+  hasLastGoodPrices(settlementPoint: string): boolean {
+    const cacheKey = `prices:${settlementPoint}`;
+    const row = this.db.prepare(`
+      SELECT 1 FROM ercot_last_good WHERE cache_key = ?
+    `).get(cacheKey);
+    return !!row;
+  }
+
   queueWrite(fn: () => void): void {
     this.writeQueue.push(fn);
   }
@@ -461,6 +561,7 @@ export class FleetDb {
       DELETE FROM commands;
       DELETE FROM dispatches;
       DELETE FROM devices;
+      DELETE FROM ercot_last_good;
     `);
   }
 

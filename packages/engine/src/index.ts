@@ -75,7 +75,7 @@ export { SeededRandom } from './random.js';
 export { Orchestrator, type OrchestratorState, type DeliveryResult } from './orchestrator.js';
 
 // Database persistence
-export { FleetDb, type DbConfig } from './db.js';
+export { FleetDb, type DbConfig, type ErcotSnapshotType } from './db.js';
 
 // ERCOT zone fixtures (synthetic) + IL zones
 export {
