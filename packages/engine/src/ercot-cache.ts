@@ -65,6 +65,9 @@ export interface ErcotHourlySnapshot {
   gridSummary: ErcotGridSummary;
 }
 
+/** Data source indicator for ERCOT honesty */
+export type ErcotDataSource = 'live' | 'cached';
+
 export interface ErcotCacheData {
   /** When data was cached (ISO timestamp) */
   cachedAt: string;
@@ -82,6 +85,8 @@ export interface ErcotCacheData {
   selectedHourKey?: string;
   /** Current hour key (for "now" marker) */
   currentHourKey?: string;
+  /** Data source: 'live' when credentials present AND fetch succeeded, 'cached' otherwise */
+  dataSource: ErcotDataSource;
 }
 
 const ZONE_BASE_DATA: Record<string, { name: string; baseLoadMw: number; windCapacity: number; solarCapacity: number; avgTempF: number }> = {
@@ -152,10 +157,11 @@ export function generateErcotCacheSnapshot(seed: number): ErcotCacheData {
   
   return {
     cachedAt: snapshotDate.toISOString(),
-    cacheLabel: 'Cached / Replay',
+    cacheLabel: 'Cached / Replay — Live ERCOT unavailable',
     zones,
     gridSummary,
     snapshotId,
+    dataSource: 'cached',
   };
 }
 

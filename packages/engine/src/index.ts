@@ -103,6 +103,7 @@ export {
   type ErcotGridSummary,
   type ErcotCacheData,
   type ErcotHourlySnapshot,
+  type ErcotDataSource,
 } from './ercot-cache.js';
 
 // ERCOT real fixture data (documented source)

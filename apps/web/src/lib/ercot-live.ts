@@ -436,19 +436,14 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
   
   return {
     cachedAt: captureTime.toISOString(),
-    cacheLabel: `Cached / Replay (Live ERCOT ${captureTime.toLocaleString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      hour: 'numeric', 
-      minute: '2-digit',
-      hour12: true,
-    })})`,
+    cacheLabel: 'LIVE',
     zones: currentSnapshot?.zones || [],
     gridSummary: currentSnapshot?.gridSummary || computeGridSummary([]),
     snapshotId: `ERCOT-LIVE-${captureTime.getTime()}`,
     hourlyData: hourlySnapshots,
     currentHourKey,
     selectedHourKey: currentHourKey,
+    dataSource: 'live' as const,
   };
 }
 
