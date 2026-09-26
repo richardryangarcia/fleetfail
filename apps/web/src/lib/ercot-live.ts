@@ -6,6 +6,16 @@
  * Authenticates via OAuth2 ROPC (Resource Owner Password Credentials) flow
  * and fetches real-time data from ERCOT's public API.
  * 
+ * Rate Limiting Strategy:
+ * - Serialized outbound calls (no Promise.all burst)
+ * - Respects Retry-After header on 429 responses
+ * - Retries up to 2 times with exponential backoff
+ * - Falls back to last-good SQLite snapshot on exhausted retries
+ * 
+ * Data Source Honesty:
+ * - dataSource: 'live' ONLY when current request's live fetch succeeds
+ * - dataSource: 'cached' for SQLite last-good or fixture fallback
+ * 
  * Environment variables (never expose to client):
  * - ERCOT_API_USERNAME
  * - ERCOT_API_PASSWORD
@@ -13,8 +23,9 @@
  */
 
 import axios from 'axios';
-import type { AxiosInstance, AxiosError } from 'axios';
+import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot } from '@fleetfail/engine';
+import { FleetDb } from '@fleetfail/engine';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -90,6 +101,85 @@ function createApiClient(token: string): AxiosInstance {
     },
     timeout: 15000,
   });
+}
+
+// ============================================================================
+// RATE LIMITING & RETRY INFRASTRUCTURE
+// ============================================================================
+
+const MAX_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 1000;
+const STAGGER_DELAY_MS = 200;
+
+let ercotDb: FleetDb | null = null;
+
+function getErcotDb(): FleetDb {
+  if (!ercotDb) {
+    ercotDb = new FleetDb({ path: '.ercot-cache.db', inMemory: false });
+  }
+  return ercotDb;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRetryAfterMs(error: AxiosError): number {
+  const retryAfter = error.response?.headers?.['retry-after'];
+  if (retryAfter) {
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds) && seconds > 0) {
+      return seconds * 1000;
+    }
+  }
+  return DEFAULT_RETRY_DELAY_MS;
+}
+
+function isRateLimitError(error: unknown): error is AxiosError {
+  if (!axios.isAxiosError(error)) return false;
+  return error.response?.status === 429;
+}
+
+function isRetryableError(error: unknown): error is AxiosError {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  return status === 429 || status === 503 || status === 502 || !status;
+}
+
+interface RetryableRequest<T> {
+  execute: () => Promise<T>;
+  description: string;
+}
+
+async function executeWithRetry<T>(
+  request: RetryableRequest<T>
+): Promise<T> {
+  let lastError: unknown;
+  
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await request.execute();
+    } catch (error) {
+      lastError = error;
+      
+      if (!isRetryableError(error) || attempt === MAX_RETRIES) {
+        throw error;
+      }
+      
+      const delayMs = isRateLimitError(error) 
+        ? getRetryAfterMs(error) 
+        : DEFAULT_RETRY_DELAY_MS * Math.pow(2, attempt);
+      
+      console.warn(
+        `ERCOT API ${request.description} failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}), ` +
+        `retrying in ${delayMs}ms: ${error.message}`
+      );
+      
+      await sleep(delayMs);
+    }
+  }
+  
+  throw lastError;
 }
 
 interface ErcotApiResponse<T> {
@@ -345,14 +435,77 @@ function computeGridSummary(zones: ErcotZoneLoad[]): ErcotGridSummary {
   };
 }
 
+/**
+ * Fetch all ERCOT grid data with serialized calls and retry logic.
+ * Saves successful results to SQLite for fallback.
+ * Falls back to last-good SQLite snapshot on failure.
+ */
 export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
-  const [actualLoad, loadForecast, windData, solarData] = await Promise.all([
-    fetchActualLoadByWeatherZone(),
-    fetchLoadForecastByWeatherZone(),
-    fetchWindActualAndForecast(),
-    fetchSolarActualAndForecast(),
-  ]);
-  
+  try {
+    const actualLoad = await executeWithRetry({
+      execute: () => fetchActualLoadByWeatherZone(),
+      description: 'actual load by weather zone',
+    });
+    
+    await sleep(STAGGER_DELAY_MS);
+    
+    const loadForecast = await executeWithRetry({
+      execute: () => fetchLoadForecastByWeatherZone(),
+      description: 'load forecast by weather zone',
+    });
+    
+    await sleep(STAGGER_DELAY_MS);
+    
+    const windData = await executeWithRetry({
+      execute: () => fetchWindActualAndForecast(),
+      description: 'wind actual and forecast',
+    });
+    
+    await sleep(STAGGER_DELAY_MS);
+    
+    const solarData = await executeWithRetry({
+      execute: () => fetchSolarActualAndForecast(),
+      description: 'solar actual and forecast',
+    });
+    
+    if (!actualLoad.length && !loadForecast.length) {
+      throw new Error('No load data available from ERCOT API');
+    }
+    
+    const result = buildErcotCacheData(actualLoad, loadForecast, windData, solarData);
+    
+    try {
+      const db = getErcotDb();
+      db.saveLastGoodGrid(result);
+    } catch (dbError) {
+      console.warn('Failed to save ERCOT data to SQLite cache:', dbError);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('ERCOT live fetch failed after retries:', error);
+    
+    try {
+      const db = getErcotDb();
+      const cached = db.loadLastGoodGrid();
+      if (cached) {
+        console.log('Falling back to last-good ERCOT grid data from SQLite');
+        return cached;
+      }
+    } catch (dbError) {
+      console.warn('Failed to load ERCOT data from SQLite cache:', dbError);
+    }
+    
+    throw error;
+  }
+}
+
+function buildErcotCacheData(
+  actualLoad: ActualLoadByZone[],
+  loadForecast: LoadForecastByZone[],
+  windData: WindActualForecast[],
+  solarData: SolarActualForecast[]
+): ErcotCacheData {
   if (!actualLoad.length && !loadForecast.length) {
     throw new Error('No load data available from ERCOT API');
   }
@@ -457,6 +610,13 @@ export function hasErcotCredentials(): boolean {
 
 export function clearTokenCache(): void {
   tokenCache = null;
+}
+
+export function clearErcotDbCache(): void {
+  if (ercotDb) {
+    ercotDb.close();
+    ercotDb = null;
+  }
 }
 
 // ============================================================================
@@ -569,6 +729,9 @@ export async function fetchSppDayAhead(
 
 /**
  * Fetch live ERCOT price data (RT + DAM) and calculate arb windows.
+ * Uses serialized calls with retry logic.
+ * Saves successful results to SQLite for fallback.
+ * Falls back to last-good SQLite snapshot on failure.
  * 
  * @param settlementPoint - Settlement point (default: HB_HUBAVG)
  * @returns PriceCacheData with live data and calculated arb windows
@@ -576,17 +739,56 @@ export async function fetchSppDayAhead(
 export async function fetchLiveErcotPrices(
   settlementPoint: string = DEFAULT_SETTLEMENT_POINT
 ): Promise<PriceCacheData> {
-  const [rtPrices, damPrices] = await Promise.all([
-    fetchSppRealTime(settlementPoint),
-    fetchSppDayAhead(settlementPoint),
-  ]);
-  
-  // Sort RT prices by timestamp descending to get most recent
+  try {
+    const rtPrices = await executeWithRetry({
+      execute: () => fetchSppRealTime(settlementPoint),
+      description: 'RT SPP prices',
+    });
+    
+    await sleep(STAGGER_DELAY_MS);
+    
+    const damPrices = await executeWithRetry({
+      execute: () => fetchSppDayAhead(settlementPoint),
+      description: 'DAM SPP prices',
+    });
+    
+    const result = buildPriceCacheData(rtPrices, damPrices, settlementPoint);
+    
+    try {
+      const db = getErcotDb();
+      db.saveLastGoodPrices(result);
+    } catch (dbError) {
+      console.warn('Failed to save ERCOT price data to SQLite cache:', dbError);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('ERCOT price fetch failed after retries:', error);
+    
+    try {
+      const db = getErcotDb();
+      const cached = db.loadLastGoodPrices(settlementPoint);
+      if (cached) {
+        console.log('Falling back to last-good ERCOT price data from SQLite');
+        return cached;
+      }
+    } catch (dbError) {
+      console.warn('Failed to load ERCOT price data from SQLite cache:', dbError);
+    }
+    
+    throw error;
+  }
+}
+
+function buildPriceCacheData(
+  rtPrices: SppPrice[],
+  damPrices: SppPrice[],
+  settlementPoint: string
+): PriceCacheData {
   const sortedRt = [...rtPrices].sort((a, b) => 
     b.timestamp.localeCompare(a.timestamp)
   );
   
-  // Sort DAM prices by timestamp ascending for window calculation
   const sortedDam = [...damPrices].sort((a, b) => 
     a.timestamp.localeCompare(b.timestamp)
   );
