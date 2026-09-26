@@ -26,7 +26,7 @@ export default function Home() {
   const [ercotData, setErcotData] = useState<ErcotData | null>(null);
   const [cachedErcotData, setCachedErcotData] = useState<ErcotCacheData | null>(null);
   const [priceData, setPriceData] = useState<PriceCacheData | null>(null);
-  const [targetKw, setTargetKw] = useState(400);
+  const [targetKw, setTargetKw] = useState(1500);
   const [loading, setLoading] = useState(false);
   const [deviceCount, setDeviceCount] = useState(50);
   const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
@@ -356,12 +356,12 @@ export default function Home() {
                 </span>
               )}
             </div>
-            {priceData?.currentPriceMwh !== null ? (
+            {priceData && priceData.currentPriceMwh !== null ? (
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
                   <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
-                    ${priceData?.currentPriceMwh?.toFixed(2) || '—'}
+                    ${priceData.currentPriceMwh.toFixed(2)}
                     <span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span>
                   </div>
                 </div>
@@ -369,7 +369,7 @@ export default function Home() {
                   <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                     Charge Window <span className="text-nc-ok">(buy low)</span>
                   </div>
-                  {priceData?.arbEdge.chargeWindow ? (
+                  {priceData.arbEdge.chargeWindow ? (
                     <div className="font-mono text-sm text-nc-ink">
                       <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
                       <span className="text-nc-ink-dim text-[10px] ml-1">
@@ -384,7 +384,7 @@ export default function Home() {
                   <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                     Discharge Window <span className="text-nc-accent">(sell high)</span>
                   </div>
-                  {priceData?.arbEdge.dischargeWindow ? (
+                  {priceData.arbEdge.dischargeWindow ? (
                     <div className="font-mono text-sm text-nc-ink">
                       <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
                       <span className="text-nc-ink-dim text-[10px] ml-1">
@@ -401,12 +401,12 @@ export default function Home() {
                 Price data unavailable — configure ERCOT credentials for live SPP
               </div>
             )}
-            {priceData?.arbEdge && !priceData.arbEdge.hasEdge && priceData.currentPriceMwh !== null && (
+            {priceData && priceData.arbEdge && !priceData.arbEdge.hasEdge && priceData.currentPriceMwh !== null && (
               <div className="mt-2 text-[10px] font-mono text-nc-warn">
                 No arb edge — spread below $5/MWh threshold
               </div>
             )}
-            {priceData?.arbEdge?.hasEdge && (
+            {priceData && priceData.arbEdge?.hasEdge && (
               <div className="mt-2 text-[10px] font-mono text-nc-ok">
                 ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread available
               </div>

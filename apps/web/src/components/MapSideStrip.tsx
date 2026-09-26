@@ -146,12 +146,12 @@ export function MapSideStrip({
             </span>
           )}
         </div>
-        {priceData?.currentPriceMwh !== null ? (
+        {priceData && priceData.currentPriceMwh !== null ? (
           <div className="space-y-2">
             <div>
               <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
               <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
-                ${priceData?.currentPriceMwh?.toFixed(2) || '—'}
+                ${priceData.currentPriceMwh.toFixed(2)}
                 <span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span>
               </div>
             </div>
@@ -160,7 +160,7 @@ export function MapSideStrip({
                 <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                   Charge <span className="text-nc-ok">(low)</span>
                 </div>
-                {priceData?.arbEdge.chargeWindow ? (
+                {priceData.arbEdge.chargeWindow ? (
                   <div className="font-mono text-xs text-nc-ink">
                     <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
                     <span className="text-nc-ink-dim text-[9px] ml-1">
@@ -175,7 +175,7 @@ export function MapSideStrip({
                 <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                   Discharge <span className="text-nc-accent">(high)</span>
                 </div>
-                {priceData?.arbEdge.dischargeWindow ? (
+                {priceData.arbEdge.dischargeWindow ? (
                   <div className="font-mono text-xs text-nc-ink">
                     <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
                     <span className="text-nc-ink-dim text-[9px] ml-1">
@@ -187,12 +187,12 @@ export function MapSideStrip({
                 )}
               </div>
             </div>
-            {priceData?.arbEdge && !priceData.arbEdge.hasEdge && (
+            {priceData.arbEdge && !priceData.arbEdge.hasEdge && (
               <div className="text-[9px] font-mono text-nc-warn">
                 No arb edge — spread &lt;$5/MWh
               </div>
             )}
-            {priceData?.arbEdge?.hasEdge && (
+            {priceData.arbEdge?.hasEdge && (
               <div className="text-[9px] font-mono text-nc-ok">
                 ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread
               </div>
