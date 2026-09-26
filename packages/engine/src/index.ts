@@ -141,4 +141,5 @@ export {
 } from './ercot-prices.js';
 
 // ERCOT API utilities
-export { encodeErcotSort } from './ercot-api-utils.js';
+// Note: encodeErcotSort was removed - ERCOT API uses separate sort/dir params
+// and only supports single-field sorting. We now sort client-side instead.

@@ -2,25 +2,14 @@
  * ERCOT API Utility Functions
  * 
  * Helpers for interacting with ERCOT public API.
+ * 
+ * SORTING STRATEGY:
+ * ERCOT's API uses separate `sort` and `dir` parameters and only supports
+ * single-field sorting. To achieve consistent multi-field ordering and avoid
+ * 400 errors from invalid sort parameters, we omit sort params entirely and
+ * sort client-side after fetching. See ercot-live.ts for the sorting helpers.
  */
 
-/**
- * Encode sort parameter for ERCOT API.
- * 
- * ERCOT only accepts these characters in sort params:
- * - 0-9, a-z, A-Z, underscore (_), dash (-), and comma (,)
- * 
- * Spaces are NOT allowed. This function replaces spaces with dashes.
- * 
- * @example
- * encodeErcotSort(['deliveryDate desc', 'hourEnding desc'])
- * // Returns: 'deliveryDate-desc,hourEnding-desc'
- * 
- * @param sortFields Array of sort fields (e.g., ['deliveryDate desc', 'hourEnding desc'])
- * @returns Encoded sort string safe for ERCOT API
- */
-export function encodeErcotSort(sortFields: string[]): string {
-  return sortFields
-    .map(field => field.replace(/\s+/g, '-'))
-    .join(',');
-}
+// Note: encodeErcotSort was removed in favor of client-side sorting.
+// ERCOT API sort param format is `sort=fieldName&dir=asc|desc` (single field only).
+// Our previous format `sort=field-dir,field-dir` was invalid and caused 400 errors.
