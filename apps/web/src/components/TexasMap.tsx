@@ -67,6 +67,21 @@ function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boo
   });
 }
 
+function createPopupContent(device: Device): string {
+  return `
+    <div class="device-popup">
+      <div style="font-weight: 600; color: #e8edf2;">${device.name}</div>
+      <div style="color: #6b7380;">Region: ${device.region} | Zone: ${device.zone}</div>
+      <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW)</div>
+      <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
+      <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
+      ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
+    </div>
+  `;
+}
+
+type DeviceMarker = L.Marker & { deviceData?: Device };
+
 function ClusterLayer({ 
   devices, 
   onDeviceClick, 
@@ -78,99 +93,65 @@ function ClusterLayer({
 }) {
   const map = useMap();
   const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null);
-  const devicesRef = useRef(devices);
-  devicesRef.current = devices;
-  
+  const markersRef = useRef<Map<string, DeviceMarker>>(new Map());
+  const onDeviceClickRef = useRef(onDeviceClick);
+  onDeviceClickRef.current = onDeviceClick;
+
   useEffect(() => {
     if (!map || typeof window === 'undefined') return;
     
-    if (clusterGroupRef.current) {
-      map.removeLayer(clusterGroupRef.current);
-      clusterGroupRef.current = null;
-    }
-    
     const clusterGroup = L.markerClusterGroup({
-        chunkedLoading: true,
-        maxClusterRadius: 60,
-        spiderfyOnMaxZoom: true,
-        showCoverageOnHover: false,
-        zoomToBoundsOnClick: true,
-        disableClusteringAtZoom: 10,
-        iconCreateFunction: (cluster) => {
-          const childCount = cluster.getChildCount();
-          const markers = cluster.getAllChildMarkers();
-          
-          let offlineCount = 0;
-          let workingCount = 0;
-          
-          markers.forEach((m) => {
-            const device = (m as L.Marker & { deviceData?: Device }).deviceData;
-            if (device) {
-              if (device.status === 'offline') offlineCount++;
-              if (device.currentSetpointKw > 0) workingCount++;
-            }
-          });
-          
-          let bgColor = '#4a5260';
-          if (offlineCount > childCount * 0.3) bgColor = '#e05454';
-          else if (workingCount > 0) bgColor = '#3dba7a';
-          
-          const size = childCount < 100 ? 40 : childCount < 1000 ? 50 : 60;
-          
-          return L.divIcon({
-            html: `
-              <div class="cluster-marker" style="
-                width: ${size}px;
-                height: ${size}px;
-                background: ${bgColor};
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: white;
-                font-weight: bold;
-                font-size: ${childCount < 100 ? '12px' : '11px'};
-                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-                border: 2px solid rgba(255,255,255,0.3);
-              ">
-                ${childCount >= 1000 ? (childCount / 1000).toFixed(1) + 'k' : childCount}
-              </div>
-            `,
-            className: 'custom-cluster-icon',
-            iconSize: [size, size],
-            iconAnchor: [size / 2, size / 2],
-          });
-        },
-      });
-      
-      devicesRef.current.forEach(device => {
-        const isWorking = device.currentSetpointKw > 0;
-        const isReallocated = recentReallocations.has(device.id) && isWorking;
-        const icon = createDeviceIcon(device, isWorking, isReallocated);
+      chunkedLoading: true,
+      maxClusterRadius: 60,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 10,
+      iconCreateFunction: (cluster) => {
+        const childCount = cluster.getChildCount();
+        const markers = cluster.getAllChildMarkers();
         
-        const marker = L.marker([device.latitude, device.longitude], { icon }) as L.Marker & { deviceData?: Device };
-        marker.deviceData = device;
+        let offlineCount = 0;
+        let workingCount = 0;
         
-        const popupContent = `
-          <div class="device-popup">
-            <div style="font-weight: 600; color: #e8edf2;">${device.name}</div>
-            <div style="color: #6b7380;">Region: ${device.region} | Zone: ${device.zone}</div>
-            <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW)</div>
-            <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
-            <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
-            ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
-          </div>
-        `;
+        markers.forEach((m) => {
+          const device = (m as DeviceMarker).deviceData;
+          if (device) {
+            if (device.status === 'offline') offlineCount++;
+            if (device.currentSetpointKw > 0) workingCount++;
+          }
+        });
         
-        marker.bindPopup(popupContent);
+        let bgColor = '#4a5260';
+        if (offlineCount > childCount * 0.3) bgColor = '#e05454';
+        else if (workingCount > 0) bgColor = '#3dba7a';
         
-        if (device.status === 'online') {
-          marker.on('click', () => {
-            onDeviceClick(device.id);
-          });
-        }
+        const size = childCount < 100 ? 40 : childCount < 1000 ? 50 : 60;
         
-        clusterGroup.addLayer(marker);
+        return L.divIcon({
+          html: `
+            <div class="cluster-marker" style="
+              width: ${size}px;
+              height: ${size}px;
+              background: ${bgColor};
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: white;
+              font-weight: bold;
+              font-size: ${childCount < 100 ? '12px' : '11px'};
+              box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+              border: 2px solid rgba(255,255,255,0.3);
+            ">
+              ${childCount >= 1000 ? (childCount / 1000).toFixed(1) + 'k' : childCount}
+            </div>
+          `,
+          className: 'custom-cluster-icon',
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        });
+      },
     });
     
     map.addLayer(clusterGroup);
@@ -181,8 +162,59 @@ function ClusterLayer({
         map.removeLayer(clusterGroupRef.current);
         clusterGroupRef.current = null;
       }
+      markersRef.current.clear();
     };
-  }, [map, devices, onDeviceClick, recentReallocations]);
+  }, [map]);
+
+  useEffect(() => {
+    const clusterGroup = clusterGroupRef.current;
+    if (!clusterGroup) return;
+
+    const currentDeviceIds = new Set(devices.map(d => d.id));
+    const existingMarkers = markersRef.current;
+
+    for (const [deviceId, marker] of existingMarkers) {
+      if (!currentDeviceIds.has(deviceId)) {
+        clusterGroup.removeLayer(marker);
+        existingMarkers.delete(deviceId);
+      }
+    }
+
+    for (const device of devices) {
+      const existingMarker = existingMarkers.get(device.id);
+      const isWorking = device.currentSetpointKw > 0;
+      const isReallocated = recentReallocations.has(device.id) && isWorking;
+      const newIcon = createDeviceIcon(device, isWorking, isReallocated);
+
+      if (existingMarker) {
+        existingMarker.deviceData = device;
+        existingMarker.setIcon(newIcon);
+        existingMarker.setPopupContent(createPopupContent(device));
+
+        existingMarker.off('click');
+        if (device.status === 'online') {
+          existingMarker.on('click', () => {
+            onDeviceClickRef.current(device.id);
+          });
+        }
+      } else {
+        const marker = L.marker([device.latitude, device.longitude], { icon: newIcon }) as DeviceMarker;
+        marker.deviceData = device;
+        marker.bindPopup(createPopupContent(device));
+
+        if (device.status === 'online') {
+          marker.on('click', () => {
+            onDeviceClickRef.current(device.id);
+          });
+        }
+
+        clusterGroup.addLayer(marker);
+        existingMarkers.set(device.id, marker);
+      }
+    }
+
+    clusterGroup.refreshClusters();
+  }, [devices, recentReallocations]);
   
   return null;
 }
