@@ -3,8 +3,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
-import 'leaflet.markercluster/dist/MarkerCluster.css';
-import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import type { Device, FleetEvent, ErcotCacheData, Dispatch } from '@fleetfail/engine';
 import L from 'leaflet';
 import { useMap } from 'react-leaflet';
