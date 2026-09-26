@@ -56,15 +56,31 @@ Add these environment variables in Vercel Dashboard → Project Settings → Env
 ### ERCOT Credential Behavior
 
 **With credentials configured and API accessible:**
-- UI displays **LIVE** badge
+- UI displays **LIVE** badge for both grid load and settlement point prices
 - Real-time ERCOT grid data with 5-minute cache TTL
+- Real-time SPP prices (RT + DAM) with 1-minute cache TTL
 
 **Without credentials OR if API fails:**
-- UI displays **"Cached / Replay — Live ERCOT unavailable"** badge
-- Fixture data from September 2024 snapshot is shown
-- Demo remains fully functional
+- Grid load: **"Cached / Replay — Live ERCOT unavailable"** badge with fixture data
+- SPP prices: **"Unavailable"** badge (never invents price data)
+- Demo remains functional for grid load; price advisor unavailable
 
 The application never silently shows fixture data as live. The banner always indicates the true data source.
+
+### Data Sources
+
+| Data | API Endpoint | Description |
+|------|--------------|-------------|
+| Grid Load | `/np6-345-cd/act_sys_load_by_wzn` | Actual load by weather zone |
+| Load Forecast | `/np3-565-cd/lf_by_model_weather_zone` | Load forecast by zone |
+| Wind | `/np4-742-cd/wpp_hrly_actual_fcast_geo` | Wind actual/forecast |
+| Solar | `/np4-745-cd/spp_hrly_actual_fcast_geo` | Solar actual/forecast |
+| RT SPP | `/np6-905-cd/spp_node_zone_hub` | Real-time settlement point prices |
+| DAM SPP | `/np4-190-cd/dam_stlmnt_pnt_prices` | Day-ahead settlement point prices |
+
+### Default Settlement Point
+
+The arb windows advisor uses **HB_HUBAVG** (ERCOT Hub Average) as the default settlement point.
 
 ## Deployment
 

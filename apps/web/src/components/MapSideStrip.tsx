@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { FleetMetrics, Dispatch, ErcotCacheData } from '@fleetfail/engine';
+import type { FleetMetrics, Dispatch, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
 import Link from 'next/link';
 
 const MAP_DEFAULT_TARGET_KW = 1500;
@@ -10,6 +10,7 @@ interface MapSideStripProps {
   metrics: FleetMetrics;
   dispatch: Dispatch | null;
   ercotData: ErcotCacheData | null;
+  priceData: PriceCacheData | null;
   isRunning: boolean;
   onStartDispatch: (targetKw: number) => void;
   onMassOutage?: (zoneId?: string) => void;
@@ -39,6 +40,7 @@ export function MapSideStrip({
   metrics,
   dispatch,
   ercotData,
+  priceData,
   isRunning,
   onStartDispatch,
   onMassOutage,
@@ -122,6 +124,86 @@ export function MapSideStrip({
           </div>
         </div>
       )}
+
+      {/* Arb Windows Price Strip */}
+      <div className="p-3 border-b border-nc-line bg-[#0a0c0f]">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">
+            Wholesale SPP $/MWh
+          </span>
+          {priceData?.dataSource === 'live' ? (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#0a1810] text-nc-ok border border-[#1e4a32]">
+              <span className="w-1.5 h-1.5 bg-nc-ok rounded-full animate-pulse" />
+              LIVE
+            </span>
+          ) : priceData?.currentPriceMwh !== null ? (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-warn border border-nc-line">
+              Cached / Replay — Live ERCOT unavailable
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-ink-mute border border-nc-line">
+              Unavailable
+            </span>
+          )}
+        </div>
+        {priceData?.currentPriceMwh !== null ? (
+          <div className="space-y-2">
+            <div>
+              <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
+              <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
+                ${priceData?.currentPriceMwh?.toFixed(2) || '—'}
+                <span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                  Charge <span className="text-nc-ok">(low)</span>
+                </div>
+                {priceData?.arbEdge.chargeWindow ? (
+                  <div className="font-mono text-xs text-nc-ink">
+                    <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
+                    <span className="text-nc-ink-dim text-[9px] ml-1">
+                      @{priceData.arbEdge.chargeWindow.hourEnding}:00
+                    </span>
+                  </div>
+                ) : (
+                  <div className="font-mono text-xs text-nc-ink-dim">—</div>
+                )}
+              </div>
+              <div>
+                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                  Discharge <span className="text-nc-accent">(high)</span>
+                </div>
+                {priceData?.arbEdge.dischargeWindow ? (
+                  <div className="font-mono text-xs text-nc-ink">
+                    <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
+                    <span className="text-nc-ink-dim text-[9px] ml-1">
+                      @{priceData.arbEdge.dischargeWindow.hourEnding}:00
+                    </span>
+                  </div>
+                ) : (
+                  <div className="font-mono text-xs text-nc-ink-dim">—</div>
+                )}
+              </div>
+            </div>
+            {priceData?.arbEdge && !priceData.arbEdge.hasEdge && (
+              <div className="text-[9px] font-mono text-nc-warn">
+                No arb edge — spread &lt;$5/MWh
+              </div>
+            )}
+            {priceData?.arbEdge?.hasEdge && (
+              <div className="text-[9px] font-mono text-nc-ok">
+                ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-nc-ink-dim text-[10px] font-mono">
+            Configure ERCOT credentials for live SPP
+          </div>
+        )}
+      </div>
 
       {/* Dispatch Control Block */}
       <div className="p-3 border-b border-nc-line">

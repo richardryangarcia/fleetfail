@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData } from '@fleetfail/engine';
+import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
 import { HourSlider } from '@/components/HourSlider';
 
 interface ErcotData {
@@ -25,6 +25,7 @@ export default function Home() {
   const [state, setState] = useState<SimulationState | null>(null);
   const [ercotData, setErcotData] = useState<ErcotData | null>(null);
   const [cachedErcotData, setCachedErcotData] = useState<ErcotCacheData | null>(null);
+  const [priceData, setPriceData] = useState<PriceCacheData | null>(null);
   const [targetKw, setTargetKw] = useState(400);
   const [loading, setLoading] = useState(false);
   const [deviceCount, setDeviceCount] = useState(50);
@@ -33,19 +34,22 @@ export default function Home() {
   const fetchState = useCallback(async () => {
     try {
       const hourParam = selectedHourKey ? `?hourKey=${encodeURIComponent(selectedHourKey)}` : '';
-      const [stateRes, ercotRes, cachedErcotRes] = await Promise.all([
+      const [stateRes, ercotRes, cachedErcotRes, priceRes] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/ercot'),
         fetch(`/api/ercot-cache${hourParam}`),
+        fetch('/api/ercot-prices'),
       ]);
-      const [stateData, ercotDataRes, cachedErcotDataRes] = await Promise.all([
+      const [stateData, ercotDataRes, cachedErcotDataRes, priceDataRes] = await Promise.all([
         stateRes.json(),
         ercotRes.json(),
         cachedErcotRes.json(),
+        priceRes.json(),
       ]);
       setState(stateData);
       setErcotData(ercotDataRes);
       setCachedErcotData(cachedErcotDataRes);
+      setPriceData(priceDataRes);
       
       if (!selectedHourKey && cachedErcotDataRes.currentHourKey) {
         setSelectedHourKey(cachedErcotDataRes.currentHourKey);
@@ -329,6 +333,84 @@ export default function Home() {
               </div>
               <ErcotMiniGrid ercotData={ercotData} cachedData={cachedErcotData} />
             </div>
+          </div>
+
+          {/* Arb Windows Price Strip */}
+          <div className="border-b border-nc-line shrink-0 p-3 bg-[#0a0c0f]">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">
+                Wholesale SPP $/MWh · {priceData?.settlementPoint || 'HB_HUBAVG'}
+              </span>
+              {priceData?.dataSource === 'live' ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#0a1810] text-nc-ok border border-[#1e4a32]">
+                  <span className="w-1.5 h-1.5 bg-nc-ok rounded-full animate-pulse" />
+                  LIVE
+                </span>
+              ) : priceData?.currentPriceMwh !== null ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-warn border border-nc-line">
+                  Cached / Replay — Live ERCOT unavailable
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-ink-mute border border-nc-line">
+                  Unavailable
+                </span>
+              )}
+            </div>
+            {priceData?.currentPriceMwh !== null ? (
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
+                  <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
+                    ${priceData?.currentPriceMwh?.toFixed(2) || '—'}
+                    <span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                    Charge Window <span className="text-nc-ok">(buy low)</span>
+                  </div>
+                  {priceData?.arbEdge.chargeWindow ? (
+                    <div className="font-mono text-sm text-nc-ink">
+                      <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
+                      <span className="text-nc-ink-dim text-[10px] ml-1">
+                        @{priceData.arbEdge.chargeWindow.hourEnding}:00
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                  )}
+                </div>
+                <div>
+                  <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                    Discharge Window <span className="text-nc-accent">(sell high)</span>
+                  </div>
+                  {priceData?.arbEdge.dischargeWindow ? (
+                    <div className="font-mono text-sm text-nc-ink">
+                      <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
+                      <span className="text-nc-ink-dim text-[10px] ml-1">
+                        @{priceData.arbEdge.dischargeWindow.hourEnding}:00
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="text-nc-ink-dim text-[11px] font-mono">
+                Price data unavailable — configure ERCOT credentials for live SPP
+              </div>
+            )}
+            {priceData?.arbEdge && !priceData.arbEdge.hasEdge && priceData.currentPriceMwh !== null && (
+              <div className="mt-2 text-[10px] font-mono text-nc-warn">
+                No arb edge — spread below $5/MWh threshold
+              </div>
+            )}
+            {priceData?.arbEdge?.hasEdge && (
+              <div className="mt-2 text-[10px] font-mono text-nc-ok">
+                ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread available
+              </div>
+            )}
           </div>
 
           {/* Devices Table */}
