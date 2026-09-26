@@ -226,10 +226,11 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
       const cache = generateErcotCacheSnapshot(42);
       
       expect(cache.cachedAt).toBeDefined();
-      expect(cache.cacheLabel).toBe('Cached / Replay');
+      expect(cache.cacheLabel).toBe('Cached / Replay — Live ERCOT unavailable');
       expect(cache.snapshotId).toBeDefined();
       expect(cache.zones).toHaveLength(8);
       expect(cache.gridSummary).toBeDefined();
+      expect(cache.dataSource).toBe('cached');
     });
 
     it('cache zones have realistic data ranges', () => {
@@ -304,6 +305,12 @@ describe('P1 LOCK - Texas Map & ERCOT Cache', () => {
       
       const minWeightPref = preferences.find(p => p.weight === 0);
       expect(minWeightPref).toBeDefined();
+    });
+
+    it('fixture data has cached dataSource for honesty', () => {
+      const cache = getErcotCache();
+      expect(cache.dataSource).toBe('cached');
+      expect(cache.cacheLabel).toContain('Cached');
     });
   });
 

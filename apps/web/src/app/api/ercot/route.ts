@@ -96,5 +96,6 @@ export async function GET() {
     zoneAllocations,
     gridStatus,
     cacheLabel: cacheData.cacheLabel,
+    dataSource: cacheData.dataSource,
   });
 }

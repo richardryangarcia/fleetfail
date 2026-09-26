@@ -103,6 +103,7 @@ export {
   type ErcotGridSummary,
   type ErcotCacheData,
   type ErcotHourlySnapshot,
+  type ErcotDataSource,
 } from './ercot-cache.js';
 
 // ERCOT real fixture data (documented source)
@@ -125,3 +126,16 @@ export {
   type ZoneAllocation,
   type ZonePreference,
 } from './zone-allocator.js';
+
+// ERCOT settlement point prices (arb windows)
+export {
+  calculateArbWindows,
+  createUnavailablePriceCache,
+  ARB_EDGE_THRESHOLD_MWH,
+  DEFAULT_SETTLEMENT_POINT,
+  DAM_HORIZON_HOURS,
+  type SppPrice,
+  type ArbWindow,
+  type ArbEdge,
+  type PriceCacheData,
+} from './ercot-prices.js';

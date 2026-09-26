@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import type { Device, FleetMetrics, FleetEvent, Dispatch, ErcotCacheData } from '@fleetfail/engine';
+import type { Device, FleetMetrics, FleetEvent, Dispatch, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
 import { MapSideStrip } from '@/components/MapSideStrip';
 import { HourSlider } from '@/components/HourSlider';
 
@@ -29,21 +29,25 @@ interface MapState {
 export default function MapPage() {
   const [state, setState] = useState<MapState | null>(null);
   const [ercotData, setErcotData] = useState<ErcotCacheData | null>(null);
+  const [priceData, setPriceData] = useState<PriceCacheData | null>(null);
   const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
 
   const fetchState = useCallback(async () => {
     try {
       const hourParam = selectedHourKey ? `?hourKey=${encodeURIComponent(selectedHourKey)}` : '';
-      const [stateRes, ercotRes] = await Promise.all([
+      const [stateRes, ercotRes, priceRes] = await Promise.all([
         fetch('/api/state'),
         fetch(`/api/ercot-cache${hourParam}`),
+        fetch('/api/ercot-prices'),
       ]);
-      const [stateData, ercotDataRes] = await Promise.all([
+      const [stateData, ercotDataRes, priceDataRes] = await Promise.all([
         stateRes.json(),
         ercotRes.json(),
+        priceRes.json(),
       ]);
       setState(stateData);
       setErcotData(ercotDataRes);
+      setPriceData(priceDataRes);
       
       if (!selectedHourKey && ercotDataRes.currentHourKey) {
         setSelectedHourKey(ercotDataRes.currentHourKey);
@@ -145,6 +149,7 @@ export default function MapPage() {
           metrics={state.metrics}
           dispatch={state.activeDispatch}
           ercotData={ercotData}
+          priceData={priceData}
           isRunning={state.isRunning}
           onStartDispatch={handleStartDispatch}
           onMassOutage={handleMassOutage}

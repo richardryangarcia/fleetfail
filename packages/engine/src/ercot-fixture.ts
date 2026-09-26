@@ -184,26 +184,29 @@ function computeGridSummary(zones: ErcotZoneLoad[]): ErcotGridSummary {
 
 export const ERCOT_REAL_FIXTURE: ErcotCacheData = {
   cachedAt: '2024-09-15T14:30:00.000Z',
-  cacheLabel: 'Cached / Replay (ERCOT Sep 2024)',
+  cacheLabel: 'Cached / Replay — Live ERCOT unavailable',
   zones: ERCOT_FIXTURE_ZONES,
   gridSummary: computeGridSummary(ERCOT_FIXTURE_ZONES),
   snapshotId: 'ERCOT-REAL-2024-09-15-1430',
+  dataSource: 'cached',
 };
 
 export const IL_REAL_FIXTURE: ErcotCacheData = {
   cachedAt: '2024-09-15T14:30:00.000Z',
-  cacheLabel: 'Cached / Replay (MISO Sep 2024)',
+  cacheLabel: 'Cached / Replay — Live ERCOT unavailable',
   zones: IL_FIXTURE_ZONES,
   gridSummary: computeGridSummary(IL_FIXTURE_ZONES),
   snapshotId: 'MISO-IL-2024-09-15-1430',
+  dataSource: 'cached',
 };
 
 export const COMBINED_REAL_FIXTURE: ErcotCacheData = {
   cachedAt: '2024-09-15T14:30:00.000Z',
-  cacheLabel: 'Cached / Replay (ERCOT+MISO Sep 2024)',
+  cacheLabel: 'Cached / Replay — Live ERCOT unavailable',
   zones: [...ERCOT_FIXTURE_ZONES, ...IL_FIXTURE_ZONES],
   gridSummary: computeGridSummary([...ERCOT_FIXTURE_ZONES, ...IL_FIXTURE_ZONES]),
   snapshotId: 'ERCOT-MISO-COMBINED-2024-09-15-1430',
+  dataSource: 'cached',
 };
 
 export function getErcotRealFixture(): ErcotCacheData {

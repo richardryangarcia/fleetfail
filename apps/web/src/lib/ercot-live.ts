@@ -436,19 +436,14 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
   
   return {
     cachedAt: captureTime.toISOString(),
-    cacheLabel: `Cached / Replay (Live ERCOT ${captureTime.toLocaleString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      hour: 'numeric', 
-      minute: '2-digit',
-      hour12: true,
-    })})`,
+    cacheLabel: 'LIVE',
     zones: currentSnapshot?.zones || [],
     gridSummary: currentSnapshot?.gridSummary || computeGridSummary([]),
     snapshotId: `ERCOT-LIVE-${captureTime.getTime()}`,
     hourlyData: hourlySnapshots,
     currentHourKey,
     selectedHourKey: currentHourKey,
+    dataSource: 'live' as const,
   };
 }
 
@@ -462,4 +457,153 @@ export function hasErcotCredentials(): boolean {
 
 export function clearTokenCache(): void {
   tokenCache = null;
+}
+
+// ============================================================================
+// SETTLEMENT POINT PRICES (Arb Windows)
+// ============================================================================
+// RT SPP: /np6-905-cd/spp_node_zone_hub (15-min real-time)
+// DAM SPP: /np4-190-cd/dam_stlmnt_pnt_prices (hourly day-ahead)
+// Default settlement point: HB_HUBAVG
+// ============================================================================
+
+import type { SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
+import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
+
+interface RtSppApiRecord {
+  deliveryDate: string;
+  deliveryHour: string;
+  deliveryInterval: string;
+  settlementPoint: string;
+  settlementPointPrice: number;
+  repeatHourFlag: string;
+}
+
+interface DamSppApiRecord {
+  deliveryDate: string;
+  hourEnding: string;
+  settlementPoint: string;
+  settlementPointPrice: number;
+  settlementPointType: string;
+}
+
+/**
+ * Fetch real-time settlement point prices (15-min intervals).
+ * API: /np6-905-cd/spp_node_zone_hub
+ * 
+ * @param settlementPoint - Settlement point to filter (default: HB_HUBAVG)
+ */
+export async function fetchSppRealTime(
+  settlementPoint: string = DEFAULT_SETTLEMENT_POINT
+): Promise<SppPrice[]> {
+  const token = await getAccessToken();
+  const client = createApiClient(token);
+  
+  const response = await client.get<ErcotApiResponse<RtSppApiRecord>>(
+    '/np6-905-cd/spp_node_zone_hub',
+    {
+      params: {
+        settlementPoint,
+        size: 100,
+        sort: 'deliveryDate desc,deliveryHour desc,deliveryInterval desc',
+      },
+    }
+  );
+  
+  const records = response.data.data || [];
+  
+  return records.map((record) => {
+    const hour = parseInt(record.deliveryHour, 10);
+    const interval = parseInt(record.deliveryInterval, 10);
+    const displayHour = hour === 24 ? 0 : hour;
+    const minutes = (interval - 1) * 15;
+    
+    return {
+      settlementPoint: record.settlementPoint,
+      timestamp: `${record.deliveryDate}T${String(displayHour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00.000Z`,
+      priceMwh: record.settlementPointPrice,
+      hourEnding: hour,
+      deliveryDate: record.deliveryDate,
+    };
+  });
+}
+
+/**
+ * Fetch day-ahead settlement point prices (hourly).
+ * API: /np4-190-cd/dam_stlmnt_pnt_prices
+ * 
+ * @param settlementPoint - Settlement point to filter (default: HB_HUBAVG)
+ */
+export async function fetchSppDayAhead(
+  settlementPoint: string = DEFAULT_SETTLEMENT_POINT
+): Promise<SppPrice[]> {
+  const token = await getAccessToken();
+  const client = createApiClient(token);
+  
+  const response = await client.get<ErcotApiResponse<DamSppApiRecord>>(
+    '/np4-190-cd/dam_stlmnt_pnt_prices',
+    {
+      params: {
+        settlementPoint,
+        size: 48,
+        sort: 'deliveryDate desc,hourEnding desc',
+      },
+    }
+  );
+  
+  const records = response.data.data || [];
+  
+  return records.map((record) => {
+    const hourEnding = parseInt(record.hourEnding.replace(':00', '').trim(), 10);
+    const displayHour = hourEnding === 24 ? 0 : hourEnding;
+    
+    return {
+      settlementPoint: record.settlementPoint,
+      timestamp: `${record.deliveryDate}T${String(displayHour).padStart(2, '0')}:00:00.000Z`,
+      priceMwh: record.settlementPointPrice,
+      hourEnding,
+      deliveryDate: record.deliveryDate,
+    };
+  });
+}
+
+/**
+ * Fetch live ERCOT price data (RT + DAM) and calculate arb windows.
+ * 
+ * @param settlementPoint - Settlement point (default: HB_HUBAVG)
+ * @returns PriceCacheData with live data and calculated arb windows
+ */
+export async function fetchLiveErcotPrices(
+  settlementPoint: string = DEFAULT_SETTLEMENT_POINT
+): Promise<PriceCacheData> {
+  const [rtPrices, damPrices] = await Promise.all([
+    fetchSppRealTime(settlementPoint),
+    fetchSppDayAhead(settlementPoint),
+  ]);
+  
+  // Sort RT prices by timestamp descending to get most recent
+  const sortedRt = [...rtPrices].sort((a, b) => 
+    b.timestamp.localeCompare(a.timestamp)
+  );
+  
+  // Sort DAM prices by timestamp ascending for window calculation
+  const sortedDam = [...damPrices].sort((a, b) => 
+    a.timestamp.localeCompare(b.timestamp)
+  );
+  
+  const currentPriceMwh = sortedRt.length > 0 ? sortedRt[0]!.priceMwh : null;
+  const arbEdge = calculateArbWindows(sortedDam);
+  
+  const captureTime = new Date();
+  
+  return {
+    cachedAt: captureTime.toISOString(),
+    dataSource: 'live' as const,
+    settlementPoint,
+    currentPriceMwh,
+    rtPrices: sortedRt,
+    damPrices: sortedDam,
+    arbEdge,
+    snapshotId: `ERCOT-PRICES-LIVE-${captureTime.getTime()}`,
+  };
 }

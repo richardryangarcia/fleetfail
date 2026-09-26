@@ -48,6 +48,33 @@ The `/map` page displays **~20,000 synthetic battery devices** across Texas (ERC
 - **Structure:** Based on MISO Zone 4/6 geography
 - **Data:** Synthetic load values for demonstration
 
+### Arb Windows (Settlement Point Prices)
+
+**P0 Advisor — Wholesale SPP signals for charge/discharge window recommendations**
+
+**ERCOT Price API (when credentials configured)**
+- **RT SPP:** `/np6-905-cd/spp_node_zone_hub` — Real-time settlement point prices (15-min)
+- **DAM SPP:** `/np4-190-cd/dam_stlmnt_pnt_prices` — Day-ahead settlement point prices (hourly)
+- **Settlement Point:** `HB_HUBAVG` (ERCOT Hub Average) — configurable
+- **Label:** "LIVE" badge when fetch succeeds
+- **Caching:** 1-minute server-side TTL
+
+**Window Algorithm:**
+1. Over next 24 DAM hours, find argmin (charge window) and argmax (discharge window)
+2. Require (discharge − charge) ≥ **$5/MWh** edge threshold
+3. If spread < $5/MWh: show "no arb edge"
+
+**Honesty Policy (stricter for prices):**
+- Keys + fetch OK → **LIVE** badge
+- Missing keys / fail → **"Unavailable"** (never invents SPP numbers)
+- Wholesale SPP $/MWh — not a residential bill
+
+**UI Display:**
+- **Now $/MWh** — current RT settlement price
+- **Charge Window** — best time to buy (lowest price)
+- **Discharge Window** — best time to sell (highest price)
+- **Spread** — $/MWh difference (green if ≥$5, warn if below threshold)
+
 ---
 
 ## Overview
@@ -249,6 +276,7 @@ Default orchestrator config (`packages/engine/src/types.ts`):
 | `/api/simulation` | POST | Control simulation `{action: 'start'|'stop'}` |
 | `/api/ercot` | GET | Get ERCOT zone data and allocations |
 | `/api/ercot-cache` | GET | Get cached ERCOT data with zone loads (labeled Cached / Replay) |
+| `/api/ercot-prices` | GET | Get settlement point prices + arb windows (HB_HUBAVG default) |
 
 ## Demo Flow
 

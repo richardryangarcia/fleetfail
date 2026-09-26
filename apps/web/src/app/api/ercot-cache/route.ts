@@ -25,11 +25,9 @@ export async function GET(request: Request) {
     } catch (error) {
       console.error('Failed to fetch live ERCOT data, falling back to fixture:', error);
       data = getCombinedFixtureWithHourlyData();
-      data.cacheLabel = 'Cached / Replay (Fixture Sep 2024)';
     }
   } else {
     data = getCombinedFixtureWithHourlyData();
-    data.cacheLabel = 'Cached / Replay (Fixture Sep 2024)';
   }
   
   if (selectedHourKey && data.hourlyData) {
