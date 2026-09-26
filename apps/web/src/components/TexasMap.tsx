@@ -30,21 +30,21 @@ const FLEET_CENTER: [number, number] = [36.0, -94.0];
 const FLEET_ZOOM = 5;
 
 function createDeviceIcon(device: Device, isWorking: boolean, isReallocated: boolean): L.DivIcon {
-  let bgColor = '#3b82f6';
+  let bgColor = '#4a5260';
   let borderColor = bgColor;
   let size = 12;
   let extraClass = '';
   
   if (device.status === 'offline') {
-    bgColor = '#ef4444';
-    borderColor = '#ef4444';
+    bgColor = '#e05454';
+    borderColor = '#e05454';
   } else if (isWorking) {
-    bgColor = '#22c55e';
-    borderColor = '#ffffff';
+    bgColor = '#3dba7a';
+    borderColor = '#f0a020';
     size = 18;
     extraClass = 'working-marker';
   } else if (isReallocated) {
-    borderColor = '#fbbf24';
+    borderColor = '#f0a020';
   }
   
   const html = `
@@ -111,9 +111,9 @@ function ClusterLayer({
             }
           });
           
-          let bgColor = '#3b82f6';
-          if (offlineCount > childCount * 0.3) bgColor = '#ef4444';
-          else if (workingCount > 0) bgColor = '#22c55e';
+          let bgColor = '#4a5260';
+          if (offlineCount > childCount * 0.3) bgColor = '#e05454';
+          else if (workingCount > 0) bgColor = '#3dba7a';
           
           const size = childCount < 100 ? 40 : childCount < 1000 ? 50 : 60;
           
@@ -153,12 +153,12 @@ function ClusterLayer({
         
         const popupContent = `
           <div class="device-popup">
-            <div style="font-weight: 600">${device.name}</div>
-            <div>Region: ${device.region} | Zone: ${device.zone}</div>
-            <div>Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW)</div>
-            <div>Status: <span style="color: ${device.status === 'online' ? '#22c55e' : '#ef4444'}">${device.status}</span></div>
-            <div>SOC: ${device.socPercent.toFixed(1)}%</div>
-            ${device.currentSetpointKw > 0 ? `<div style="color: #22c55e; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
+            <div style="font-weight: 600; color: #e8edf2;">${device.name}</div>
+            <div style="color: #6b7380;">Region: ${device.region} | Zone: ${device.zone}</div>
+            <div style="color: #6b7380;">Gen: ${device.generation.toUpperCase()} (${device.maxPowerKw}kW)</div>
+            <div style="color: #6b7380;">Status: <span style="color: ${device.status === 'online' ? '#3dba7a' : '#e05454'}">${device.status}</span></div>
+            <div style="color: #6b7380;">SOC: <span style="color: #c8ced6;">${device.socPercent.toFixed(1)}%</span></div>
+            ${device.currentSetpointKw > 0 ? `<div style="color: #f0a020; font-weight: bold;">⚡ ${device.currentSetpointKw.toFixed(1)} kW ACTIVE</div>` : ''}
           </div>
         `;
         
@@ -228,8 +228,8 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
 
   if (!mounted) {
     return (
-      <div className="w-full h-full bg-slate-900 flex items-center justify-center">
-        <div className="text-slate-400">Loading Fleet Map...</div>
+      <div className="w-full h-full bg-nc-bg flex items-center justify-center">
+        <div className="text-nc-ink-mute font-mono text-sm">Loading Fleet Map...</div>
       </div>
     );
   }
@@ -240,7 +240,7 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
         center={FLEET_CENTER}
         zoom={FLEET_ZOOM}
         className="w-full h-full"
-        style={{ background: '#0f172a' }}
+        style={{ background: '#0a0b0d' }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -254,24 +254,24 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
         />
       </MapContainer>
       
-      {/* Device count overlay */}
-      <div className="absolute bottom-4 left-4 bg-slate-800/90 text-white px-3 py-2 rounded-lg text-xs z-[1000] border border-slate-600">
-        <div className="font-semibold mb-1">Fleet: {deviceSummary.total.toLocaleString()} devices</div>
-        <div className="flex gap-3 text-slate-300">
+      {/* Device count overlay - Night Console style */}
+      <div className="absolute bottom-4 left-4 bg-nc-elev/95 px-3 py-2 text-xs z-[1000] border border-nc-line-strong">
+        <div className="font-mono font-semibold text-nc-num mb-1">Fleet: {deviceSummary.total.toLocaleString()} devices</div>
+        <div className="flex gap-3 font-mono text-nc-ink-dim text-[11px] tabular-nums">
           <span>TX: {deviceSummary.tx.toLocaleString()}</span>
           <span>IL: {deviceSummary.il.toLocaleString()}</span>
         </div>
-        <div className="flex gap-3 text-slate-300">
-          <span className="text-green-400">Online: {deviceSummary.online.toLocaleString()}</span>
+        <div className="flex gap-3 font-mono text-[11px] tabular-nums">
+          <span className="text-nc-ok">Online: {deviceSummary.online.toLocaleString()}</span>
           {deviceSummary.working > 0 && (
-            <span className="text-emerald-400 font-bold">Working: {deviceSummary.working}</span>
+            <span className="text-nc-accent font-semibold">Working: {deviceSummary.working}</span>
           )}
         </div>
       </div>
       
-      {/* Dispatch hint overlay */}
+      {/* Dispatch hint overlay - Night Console style */}
       {!isDispatchActive && (
-        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-slate-800/90 text-amber-400 px-4 py-2 rounded-lg text-sm font-medium border border-amber-600/50 z-[1000]">
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-nc-elev/95 text-nc-accent px-4 py-2 text-[12px] font-mono border border-nc-accent-dim z-[1000]">
           Start a dispatch, then click device clusters to zoom in and take devices offline
         </div>
       )}
@@ -280,15 +280,15 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
         @keyframes pulse-working {
           0% { 
             transform: scale(1);
-            box-shadow: 0 0 4px #22c55e;
+            box-shadow: 0 0 4px #3dba7a;
           }
           50% { 
             transform: scale(1.2);
-            box-shadow: 0 0 12px #22c55e;
+            box-shadow: 0 0 12px #3dba7a;
           }
           100% { 
             transform: scale(1);
-            box-shadow: 0 0 4px #22c55e;
+            box-shadow: 0 0 4px #3dba7a;
           }
         }
         .working-marker {
@@ -307,18 +307,39 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
           top: -18px;
           left: 50%;
           transform: translateX(-50%);
-          background: rgba(0, 0, 0, 0.9);
-          color: #22c55e;
+          background: #0a0b0d;
+          color: #f0a020;
           font-size: 10px;
           font-weight: bold;
+          font-family: "SF Mono", "IBM Plex Mono", ui-monospace, monospace;
           padding: 1px 4px;
-          border-radius: 3px;
-          border: 1px solid #22c55e;
+          border: 1px solid #a87018;
           white-space: nowrap;
         }
         .device-popup {
-          font-size: 12px;
-          line-height: 1.4;
+          font-size: 11px;
+          line-height: 1.5;
+          font-family: "SF Mono", "IBM Plex Mono", ui-monospace, monospace;
+          background: #111318;
+          color: #c8ced6;
+          padding: 8px;
+          margin: -14px -20px;
+        }
+        .leaflet-popup-content-wrapper {
+          background: #111318 !important;
+          border: 1px solid #2a3038 !important;
+          border-radius: 0 !important;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+        }
+        .leaflet-popup-tip {
+          background: #111318 !important;
+          border: 1px solid #2a3038 !important;
+        }
+        .leaflet-popup-close-button {
+          color: #6b7380 !important;
+        }
+        .leaflet-popup-close-button:hover {
+          color: #c8ced6 !important;
         }
         .cluster-marker {
           transition: transform 0.2s;
@@ -328,6 +349,14 @@ export function TexasMap({ devices, events, ercotData, dispatch, onDeviceClick, 
         }
         .leaflet-marker-icon {
           cursor: pointer;
+        }
+        .leaflet-control-attribution {
+          background: rgba(10, 11, 13, 0.8) !important;
+          color: #4a5260 !important;
+          font-size: 9px !important;
+        }
+        .leaflet-control-attribution a {
+          color: #6b7380 !important;
         }
       `}</style>
     </div>

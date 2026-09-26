@@ -10,8 +10,8 @@ const TexasMap = dynamic(
   { 
     ssr: false,
     loading: () => (
-      <div className="flex-1 bg-slate-900 flex items-center justify-center">
-        <div className="text-slate-400">Loading Texas Map...</div>
+      <div className="flex-1 bg-nc-bg flex items-center justify-center">
+        <div className="text-nc-ink-mute font-mono text-sm">Loading Texas Map...</div>
       </div>
     )
   }
@@ -100,33 +100,42 @@ export default function MapPage() {
 
   if (!state) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
-        <div className="text-xl text-slate-300">Loading FleetFail Map...</div>
+      <div className="min-h-screen flex items-center justify-center bg-nc-bg">
+        <div className="text-sm font-mono text-nc-ink-mute">Loading FleetFail Map...</div>
       </div>
     );
   }
 
   return (
-    <main className="h-screen flex overflow-hidden">
-      <div className="flex-1 relative">
-        <TexasMap
-          devices={state.devices}
-          events={state.events}
-          ercotData={ercotData}
+    <div className="h-screen flex flex-col bg-nc-bg">
+      <main className="flex-1 flex overflow-hidden">
+        <div className="flex-1 relative">
+          <TexasMap
+            devices={state.devices}
+            events={state.events}
+            ercotData={ercotData}
+            dispatch={state.activeDispatch}
+            onDeviceClick={handleDeviceClick}
+            onZoneClick={handleMassOutage}
+          />
+        </div>
+        <MapSideStrip
+          metrics={state.metrics}
           dispatch={state.activeDispatch}
-          onDeviceClick={handleDeviceClick}
-          onZoneClick={handleMassOutage}
+          ercotData={ercotData}
+          isRunning={state.isRunning}
+          onStartDispatch={handleStartDispatch}
+          onMassOutage={handleMassOutage}
+          onRestoreAll={handleRestoreAll}
         />
-      </div>
-      <MapSideStrip
-        metrics={state.metrics}
-        dispatch={state.activeDispatch}
-        ercotData={ercotData}
-        isRunning={state.isRunning}
-        onStartDispatch={handleStartDispatch}
-        onMassOutage={handleMassOutage}
-        onRestoreAll={handleRestoreAll}
-      />
-    </main>
+      </main>
+      {/* SYNTHETIC DISCLAIMER - always visible */}
+      <footer className="h-7 bg-nc-panel border-t border-nc-line-strong flex items-center px-4 shrink-0">
+        <span className="text-[10px] font-mono tracking-wider text-nc-warn font-semibold uppercase mr-2">SYNTHETIC DISCLAIMER</span>
+        <span className="text-[10px] font-mono tracking-wide text-nc-ink-mute uppercase">
+          Simulated ERCOT / fleet telemetry for hackathon demo only. Not connected to live grid or production devices.
+        </span>
+      </footer>
+    </div>
   );
 }
