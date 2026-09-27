@@ -574,19 +574,6 @@ export default function Home() {
                   {cachedErcotData?.hourlyData?.find(h => h.hourKey === selectedHourKey)?.dataType === 'actual' ? 'ACTUAL' : 'FORECAST'}
                 </span>
               </div>
-              {/* ERCOT Data Source Badge */}
-              <div className="mb-2">
-                {cachedErcotData?.dataSource === 'live' ? (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#0a1810] text-nc-ok border border-[#1e4a32]">
-                    <span className="w-1.5 h-1.5 bg-nc-ok rounded-full animate-pulse" />
-                    LIVE
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-warn border border-nc-line">
-                    Cached / Replay — Live ERCOT unavailable
-                  </span>
-                )}
-              </div>
               <ErcotMiniGrid ercotData={ercotData} cachedData={cachedErcotData} selectedHourKey={selectedHourKey} />
             </div>
           </div>

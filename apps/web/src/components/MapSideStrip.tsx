@@ -154,19 +154,6 @@ export function MapSideStrip({
             <span className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">ERCOT Grid</span>
             <span className="text-[9px] text-nc-ink-mute tracking-wide">SYNTHETIC</span>
           </div>
-          {/* ERCOT Data Source Badge */}
-          <div className="mb-2">
-            {ercotData.dataSource === 'live' ? (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#0a1810] text-nc-ok border border-[#1e4a32]">
-                <span className="w-1.5 h-1.5 bg-nc-ok rounded-full animate-pulse" />
-                LIVE
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-warn border border-nc-line">
-                Cached / Replay — Live ERCOT unavailable
-              </span>
-            )}
-          </div>
           <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
             <div>
               <span className="text-nc-ink-mute">Load</span>
