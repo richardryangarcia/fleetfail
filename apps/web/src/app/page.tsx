@@ -226,13 +226,13 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Proof Strip - 36px */}
-      <div className="h-9 grid grid-cols-5 border-b border-nc-line-strong bg-[#0c0e12] shrink-0">
-        <ProofCell label="Delivered" value={Math.round(metrics.deliveredKw)} accent />
-        <ProofCell label="Pending Cmds" value={metrics.pendingCommands} />
-        <ProofCell label="Duplicates Ignored" value={metrics.duplicatesIgnored} />
-        <ProofCell label="Stale Rejected" value={metrics.staleRejected} warn={metrics.staleRejected > 0} />
-        <ProofCell label="Reallocations" value={metrics.reallocations} accent last />
+      {/* Proof Strip - 48px for full digit visibility */}
+      <div className="h-12 grid grid-cols-5 border-b border-nc-line-strong bg-[#0c0e12] shrink-0 relative z-10">
+        <ProofCell label="Delivered" value={Math.round(metrics?.deliveredKw ?? 0)} accent />
+        <ProofCell label="Pending Cmds" value={metrics?.pendingCommands ?? 0} />
+        <ProofCell label="Duplicates Ignored" value={metrics?.duplicatesIgnored ?? 0} />
+        <ProofCell label="Stale Rejected" value={metrics?.staleRejected ?? 0} warn={(metrics?.staleRejected ?? 0) > 0} />
+        <ProofCell label="Reallocations" value={metrics?.reallocations ?? 0} accent last />
       </div>
 
       {/* Body - 220px | 1fr | 340px */}
