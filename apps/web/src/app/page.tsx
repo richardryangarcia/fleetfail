@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
-import { findPriceForHourKey } from '@fleetfail/engine';
+import { findPriceForHourKey } from '@fleetfail/engine/ercot-prices';
 import { HourSlider } from '@/components/HourSlider';
 
 const PRICE_REFRESH_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP TTL

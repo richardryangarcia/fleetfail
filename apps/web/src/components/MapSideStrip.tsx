@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { FleetMetrics, Dispatch, ErcotCacheData, PriceCacheData, ArbWindow } from '@fleetfail/engine';
-import { findPriceForHourKey } from '@fleetfail/engine';
+import { findPriceForHourKey } from '@fleetfail/engine/ercot-prices';
 import Link from 'next/link';
 
 const MAP_DEFAULT_TARGET_KW = 1500;
