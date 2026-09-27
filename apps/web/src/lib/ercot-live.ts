@@ -514,6 +514,18 @@ interface ErcotApiResponse<T> {
 }
 
 /**
+ * Convert PascalCase or snake_case field names to camelCase.
+ * ERCOT API returns field names like "DeliveryDate", "HourEnding", "SystemTotal".
+ * Our TypeScript interfaces expect "deliveryDate", "hourEnding", "systemTotal".
+ */
+function toCamelCase(fieldName: string): string {
+  return fieldName
+    .replace(/^([A-Z])/, (_, c) => c.toLowerCase())
+    .replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+    .replace(/([A-Z])/g, (_, c) => c.toLowerCase());
+}
+
+/**
  * Transform ERCOT API response from positional arrays to named objects.
  * 
  * ERCOT API returns data in two formats:
@@ -534,7 +546,7 @@ function transformErcotResponse<T>(
   const firstRow = data[0];
   
   if (fields && Array.isArray(fields) && fields.length > 0 && Array.isArray(firstRow)) {
-    const fieldNames = fields.map(f => f.name);
+    const fieldNames = fields.map(f => toCamelCase(f.name));
     return (data as unknown[][]).map(row => {
       const obj: Record<string, unknown> = {};
       fieldNames.forEach((name, idx) => {
@@ -547,7 +559,14 @@ function transformErcotResponse<T>(
   }
   
   if (typeof firstRow === 'object' && firstRow !== null && !Array.isArray(firstRow)) {
-    return data as T[];
+    const normalized = (data as Record<string, unknown>[]).map(item => {
+      const obj: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(item)) {
+        obj[toCamelCase(key)] = value;
+      }
+      return obj as T;
+    });
+    return normalized;
   }
   
   console.warn('ERCOT API response format not recognized, returning empty array');
@@ -687,7 +706,7 @@ export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZo
   
   const response = await client.get<ErcotApiResponse<LoadForecastByZone>>('/np3-565-cd/lf_by_model_weather_zone', {
     params: {
-      size: 24,
+      size: 72,
     },
   });
   
@@ -1066,8 +1085,9 @@ function buildErcotCacheData(
   const captureTime = new Date();
   const currentHour = captureTime.getHours();
   const currentDate = captureTime.toISOString().split('T')[0];
-  const currentHourKey = `${currentDate} ${String(currentHour).padStart(2, '0')}:00`;
+  const wallClockHourKey = `${currentDate} ${String(currentHour).padStart(2, '0')}:00`;
   
+  const currentHourKey = selectBestCurrentHourKey(hourlySnapshots, wallClockHourKey);
   const currentSnapshot = hourlySnapshots.find(h => h.hourKey === currentHourKey) || hourlySnapshots[0];
   
   return {
@@ -1081,6 +1101,51 @@ function buildErcotCacheData(
     selectedHourKey: currentHourKey,
     dataSource: 'live' as const,
   };
+}
+
+/**
+ * Select the best "current" hour key from the available hourly data.
+ * 
+ * Priority:
+ * 1. Exact wall-clock match if present
+ * 2. Nearest actual hour to wall-clock (prefer older if equidistant)
+ * 3. Latest actual hour if no wall-clock match
+ * 4. First hour in series as fallback
+ * 
+ * NEVER returns a wall-clock key that isn't in hourlyData.
+ */
+function selectBestCurrentHourKey(hourlySnapshots: ErcotHourlySnapshot[], wallClockHourKey: string): string {
+  if (hourlySnapshots.length === 0) {
+    return wallClockHourKey;
+  }
+  
+  const exactMatch = hourlySnapshots.find(h => h.hourKey === wallClockHourKey);
+  if (exactMatch) {
+    return wallClockHourKey;
+  }
+  
+  const actuals = hourlySnapshots.filter(h => h.dataType === 'actual');
+  
+  if (actuals.length > 0) {
+    const latestActual = actuals[actuals.length - 1]!;
+    
+    const wallClockTime = new Date(wallClockHourKey.replace(' ', 'T') + ':00Z').getTime();
+    let nearest = latestActual;
+    let nearestDistance = Infinity;
+    
+    for (const snapshot of actuals) {
+      const snapshotTime = new Date(snapshot.hourKey.replace(' ', 'T') + ':00Z').getTime();
+      const distance = Math.abs(wallClockTime - snapshotTime);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = snapshot;
+      }
+    }
+    
+    return nearest.hourKey;
+  }
+  
+  return hourlySnapshots[0]!.hourKey;
 }
 
 export function hasErcotCredentials(): boolean {

@@ -167,12 +167,6 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [fetchPrices]);
   
-  useEffect(() => {
-    if (selectedHourKey) {
-      fetchPrices();
-    }
-  }, [selectedHourKey, fetchPrices]);
-  
   const handleHourChange = useCallback((hourKey: string) => {
     setSelectedHourKey(hourKey);
   }, []);
