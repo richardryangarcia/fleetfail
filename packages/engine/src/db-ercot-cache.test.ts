@@ -25,34 +25,55 @@ describe('FleetDb ERCOT Last-Good Cache', () => {
   });
 
   describe('Grid Data Cache', () => {
+    const mockZone = {
+      zoneId: 'COAST',
+      zoneName: 'Coast (Houston/Galveston)',
+      loadMw: 9247,
+      forecastLoadMw: 9450,
+      windMw: 892,
+      solarMw: 412,
+      netLoadMw: 7943,
+      temperatureF: 89,
+      windSpeedMph: 12,
+    };
+    
+    const mockGridSummary = {
+      totalLoadMw: 50000,
+      totalWindMw: 10000,
+      totalSolarMw: 5000,
+      totalRenewablesMw: 15000,
+      renewablesPercent: 30,
+      reservesMw: 4000,
+      frequencyHz: 60.0,
+      operatingCondition: 'normal' as const,
+    };
+    
     const mockGridData: ErcotCacheData = {
       cachedAt: '2024-09-15T14:30:00.000Z',
       cacheLabel: 'LIVE',
-      zones: [
-        {
-          zoneId: 'COAST',
-          zoneName: 'Coast (Houston/Galveston)',
-          loadMw: 9247,
-          forecastLoadMw: 9450,
-          windMw: 892,
-          solarMw: 412,
-          netLoadMw: 7943,
-          temperatureF: 89,
-          windSpeedMph: 12,
-        },
-      ],
-      gridSummary: {
-        totalLoadMw: 50000,
-        totalWindMw: 10000,
-        totalSolarMw: 5000,
-        totalRenewablesMw: 15000,
-        renewablesPercent: 30,
-        reservesMw: 4000,
-        frequencyHz: 60.0,
-        operatingCondition: 'normal',
-      },
+      zones: [mockZone],
+      gridSummary: mockGridSummary,
       snapshotId: 'ERCOT-LIVE-1234567890',
       dataSource: 'live' as ErcotDataSource,
+      hourlyData: [
+        {
+          hourKey: '2024-09-15 14:00',
+          deliveryDate: '2024-09-15',
+          hourEnding: 14,
+          dataType: 'actual' as const,
+          zones: [mockZone],
+          gridSummary: mockGridSummary,
+        },
+        {
+          hourKey: '2024-09-15 15:00',
+          deliveryDate: '2024-09-15',
+          hourEnding: 15,
+          dataType: 'forecast' as const,
+          zones: [mockZone],
+          gridSummary: mockGridSummary,
+        },
+      ],
+      currentHourKey: '2024-09-15 14:00',
     };
 
     it('saves and loads grid data successfully', () => {
@@ -97,11 +118,30 @@ describe('FleetDb ERCOT Last-Good Cache', () => {
       const updatedData: ErcotCacheData = {
         ...mockGridData,
         gridSummary: { ...mockGridData.gridSummary, totalLoadMw: 60000 },
+        hourlyData: mockGridData.hourlyData,
       };
       db.saveLastGoodGrid(updatedData);
       
       const loaded = db.loadLastGoodGrid();
       expect(loaded!.gridSummary.totalLoadMw).toBe(60000);
+    });
+    
+    it('refuses to save empty hourlyData (v3 guard)', () => {
+      const emptyHourlyData: ErcotCacheData = {
+        ...mockGridData,
+        hourlyData: [],
+      };
+      db.saveLastGoodGrid(emptyHourlyData);
+      expect(db.hasLastGoodGrid()).toBe(false);
+    });
+    
+    it('refuses to save undefined hourlyData (v3 guard)', () => {
+      const noHourlyData: ErcotCacheData = {
+        ...mockGridData,
+        hourlyData: undefined,
+      };
+      db.saveLastGoodGrid(noHourlyData);
+      expect(db.hasLastGoodGrid()).toBe(false);
     });
   });
 
@@ -195,22 +235,43 @@ describe('FleetDb ERCOT Last-Good Cache', () => {
 
   describe('Clear', () => {
     it('clear removes ercot_last_good data', () => {
+      const mockZone = {
+        zoneId: 'COAST',
+        zoneName: 'Coast',
+        loadMw: 9000,
+        forecastLoadMw: 9100,
+        windMw: 800,
+        solarMw: 400,
+        netLoadMw: 7800,
+        temperatureF: 88,
+        windSpeedMph: 10,
+      };
+      const mockSummary = {
+        totalLoadMw: 50000,
+        totalWindMw: 10000,
+        totalSolarMw: 5000,
+        totalRenewablesMw: 15000,
+        renewablesPercent: 30,
+        reservesMw: 4000,
+        frequencyHz: 60.0,
+        operatingCondition: 'normal' as const,
+      };
       const gridData: ErcotCacheData = {
         cachedAt: '2024-09-15T14:30:00.000Z',
         cacheLabel: 'LIVE',
-        zones: [],
-        gridSummary: {
-          totalLoadMw: 50000,
-          totalWindMw: 10000,
-          totalSolarMw: 5000,
-          totalRenewablesMw: 15000,
-          renewablesPercent: 30,
-          reservesMw: 4000,
-          frequencyHz: 60.0,
-          operatingCondition: 'normal',
-        },
+        zones: [mockZone],
+        gridSummary: mockSummary,
         snapshotId: 'TEST',
         dataSource: 'live' as ErcotDataSource,
+        hourlyData: [{
+          hourKey: '2024-09-15 14:00',
+          deliveryDate: '2024-09-15',
+          hourEnding: 14,
+          dataType: 'actual' as const,
+          zones: [mockZone],
+          gridSummary: mockSummary,
+        }],
+        currentHourKey: '2024-09-15 14:00',
       };
 
       db.saveLastGoodGrid(gridData);

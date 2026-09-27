@@ -443,14 +443,19 @@ export class FleetDb {
   /**
    * Cache key version - bump this when hourlyData shape changes to bust stale cache.
    * v2: Fixed PascalCase→camelCase field mapping, 72h forecast, proper currentHourKey selection.
+   * v3: Added canonical alias map (any casing → correct camelCase), empty-hourlyData guard.
    */
-  private static readonly CACHE_KEY_VERSION = 'v2';
+  private static readonly CACHE_KEY_VERSION = 'v3';
 
   /**
    * Save last-good ERCOT grid data snapshot.
    * Called on successful live fetch to preserve for fallback.
    */
   saveLastGoodGrid(data: ErcotCacheData): void {
+    if (!data.hourlyData || data.hourlyData.length === 0) {
+      console.warn('FleetDb: Refusing to save empty hourlyData to last-good cache');
+      return;
+    }
     const cacheKey = `grid:${FleetDb.CACHE_KEY_VERSION}`;
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO ercot_last_good (cache_key, type, data, captured_at)
