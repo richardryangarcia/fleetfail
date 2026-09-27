@@ -2,10 +2,14 @@ import { describe, it, expect } from 'vitest';
 import {
   calculateArbWindows,
   createUnavailablePriceCache,
+  sppHourKey,
+  findPriceForHourKey,
+  mergePriceSeries,
   ARB_EDGE_THRESHOLD_MWH,
   DEFAULT_SETTLEMENT_POINT,
   DAM_HORIZON_HOURS,
   type SppPrice,
+  type PriceCacheData,
 } from './ercot-prices.js';
 
 /**
@@ -82,26 +86,27 @@ describe('ERCOT Settlement Point Prices', () => {
     });
 
     it('respects DAM_HORIZON_HOURS limit (24 hours)', () => {
-      // Generate 48 hours of data - should only use first 24 after sorting
+      // Generate 48 hours of historical data. With no upcoming hours, arb uses the
+      // most recent 24h so a 7-day backfill does not pin windows to day 1.
       const damPrices: SppPrice[] = [];
       
-      // First 24 hours (2024-09-15) - will be sorted first
+      // Older day (2024-09-15) — outside recent horizon
       for (let i = 0; i < 24; i++) {
         damPrices.push({
           settlementPoint: 'HB_HUBAVG',
           timestamp: `2024-09-15T${String(i).padStart(2, '0')}:00:00.000Z`,
-          priceMwh: i === 0 ? 10.00 : 35.00, // Min at hour 0
+          priceMwh: i === 0 ? 10.00 : 35.00,
           hourEnding: i === 0 ? 24 : i,
           deliveryDate: '2024-09-15',
         });
       }
       
-      // Next 24 hours (2024-09-16) - will be sorted after, outside horizon
+      // Most recent day (2024-09-16) — within 24h horizon
       for (let i = 0; i < 24; i++) {
         damPrices.push({
           settlementPoint: 'HB_HUBAVG',
           timestamp: `2024-09-16T${String(i).padStart(2, '0')}:00:00.000Z`,
-          priceMwh: i === 6 ? 100.00 : 35.00, // Max at hour 6 of day 2 (outside 24h horizon)
+          priceMwh: i === 6 ? 100.00 : 35.00,
           hourEnding: i === 0 ? 24 : i,
           deliveryDate: '2024-09-16',
         });
@@ -109,10 +114,9 @@ describe('ERCOT Settlement Point Prices', () => {
 
       const result = calculateArbWindows(damPrices);
 
-      // Should find min at hour 0 ($10), max within first 24 hours only ($35)
-      expect(result.chargeWindow!.priceMwh).toBe(10.00);
-      // The max outside horizon ($100 at 2024-09-16T06:00) should not be selected
-      expect(result.dischargeWindow!.priceMwh).toBe(35.00);
+      // Day-1 $10 min is outside the recent 24h window
+      expect(result.chargeWindow!.priceMwh).toBe(35.00);
+      expect(result.dischargeWindow!.priceMwh).toBe(100.00);
       expect(DAM_HORIZON_HOURS).toBe(24);
     });
 
@@ -194,5 +198,67 @@ describe('ERCOT Settlement Point Prices', () => {
       expect(result.arbEdge.chargeWindow).toBeNull();
       expect(result.arbEdge.dischargeWindow).toBeNull();
     });
+  });
+});
+
+
+describe('hour-scoped prices', () => {
+  const sample: PriceCacheData = {
+    cachedAt: new Date().toISOString(),
+    dataSource: 'live',
+    settlementPoint: 'HB_HUBAVG',
+    currentPriceMwh: 99,
+    rtPrices: [{
+      settlementPoint: 'HB_HUBAVG',
+      timestamp: '2026-09-25T14:15:00.000Z',
+      priceMwh: 40,
+      hourEnding: 14,
+      deliveryDate: '2026-09-25',
+    }],
+    damPrices: [{
+      settlementPoint: 'HB_HUBAVG',
+      timestamp: '2026-09-25T14:00:00.000Z',
+      priceMwh: 35,
+      hourEnding: 14,
+      deliveryDate: '2026-09-25',
+    }],
+    arbEdge: {
+      hasEdge: false,
+      spreadMwh: 0,
+      chargeWindow: null,
+      dischargeWindow: null,
+      explanation: 'test',
+    },
+    snapshotId: 'TEST',
+  };
+
+  it('sppHourKey maps hourEnding 24 to 00:00', () => {
+    expect(sppHourKey({ deliveryDate: '2026-09-25', hourEnding: 24 })).toBe('2026-09-25 00:00');
+  });
+
+  it('findPriceForHourKey prefers DAM over RT for the same hour', () => {
+    const hit = findPriceForHourKey(sample, '2026-09-25 14:00');
+    expect(hit).toEqual({ priceMwh: 35, source: 'dam', hourKey: '2026-09-25 14:00' });
+  });
+
+  it('findPriceForHourKey returns null when hour missing (does not use currentPriceMwh)', () => {
+    expect(findPriceForHourKey(sample, '2026-09-20 10:00')).toBeNull();
+  });
+
+  it('mergePriceSeries keeps prior DAM hours when incoming is shorter', () => {
+    const incoming: PriceCacheData = {
+      ...sample,
+      damPrices: [{
+        settlementPoint: 'HB_HUBAVG',
+        timestamp: '2026-09-26T01:00:00.000Z',
+        priceMwh: 12,
+        hourEnding: 1,
+        deliveryDate: '2026-09-26',
+      }],
+      currentPriceMwh: 12,
+    };
+    const merged = mergePriceSeries(sample, incoming);
+    expect(merged.damPrices).toHaveLength(2);
+    expect(merged.damPrices.map((p) => p.priceMwh).sort((a, b) => a - b)).toEqual([12, 35]);
   });
 });

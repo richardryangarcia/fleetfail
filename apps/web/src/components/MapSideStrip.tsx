@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { FleetMetrics, Dispatch, ErcotCacheData, PriceCacheData, ArbWindow } from '@fleetfail/engine';
+import { findPriceForHourKey } from '@fleetfail/engine';
 import Link from 'next/link';
 
 const MAP_DEFAULT_TARGET_KW = 1500;
@@ -28,6 +29,7 @@ interface MapSideStripProps {
   dispatch: Dispatch | null;
   ercotData: ErcotCacheData | null;
   priceData: PriceCacheData | null;
+  selectedHourKey?: string | null;
   isRunning: boolean;
   arbMode: ArbModeState | null;
   autoFireStatus: AutoFireStatus | null;
@@ -63,6 +65,7 @@ export function MapSideStrip({
   dispatch,
   ercotData,
   priceData,
+  selectedHourKey = null,
   isRunning,
   arbMode,
   autoFireStatus,
@@ -89,6 +92,11 @@ export function MapSideStrip({
     staleRejected: metrics?.staleRejected ?? 0,
     pendingCommands: metrics?.pendingCommands ?? 0,
   };
+
+  const hourPrice = findPriceForHourKey(priceData, selectedHourKey);
+  const hourPriceLabel = hourPrice
+    ? hourPrice.source === 'dam' ? 'DAM' : 'RT'
+    : null;
 
   return (
     <div className="w-80 bg-nc-panel border-l border-nc-line-strong flex flex-col h-full overflow-y-auto">
@@ -186,12 +194,14 @@ export function MapSideStrip({
         </div>
         <div className="space-y-2">
           <div>
-            <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
+            <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+              Selected hour{hourPriceLabel ? <span className="ml-1 text-nc-ink-dim normal-case tracking-normal">({hourPriceLabel})</span> : null}
+            </div>
             <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
-              {priceData && priceData.currentPriceMwh !== null ? (
-                <>${priceData.currentPriceMwh.toFixed(2)}<span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span></>
+              {hourPrice ? (
+                <>${hourPrice.priceMwh.toFixed(2)}<span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span></>
               ) : (
-                <span className="text-nc-ink-dim">—</span>
+                <span className="text-nc-ink-dim text-sm font-normal">No price for hour</span>
               )}
             </div>
           </div>
@@ -237,9 +247,9 @@ export function MapSideStrip({
               ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread
             </div>
           )}
-          {priceData?.currentPriceMwh === null && (
+          {!hourPrice && (
             <div className="text-[9px] font-mono text-nc-ink-dim">
-              Price data unavailable
+              {selectedHourKey ? 'No DAM/RT price for selected hour' : 'Price data unavailable'}
             </div>
           )}
         </div>

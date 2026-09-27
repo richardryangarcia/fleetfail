@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
+import { findPriceForHourKey } from '@fleetfail/engine';
 import { HourSlider } from '@/components/HourSlider';
 
 const PRICE_REFRESH_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP TTL
@@ -405,6 +406,8 @@ export default function Home() {
     return '';
   };
 
+  const hourPrice = findPriceForHourKey(priceData, selectedHourKey);
+
   return (
     <div className="h-screen flex flex-col max-w-[1440px] mx-auto border-l border-r border-nc-line">
       {/* Header - 44px */}
@@ -610,12 +613,19 @@ export default function Home() {
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">Now</div>
+                <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
+                  Selected hour
+                  {hourPrice ? (
+                    <span className="ml-1 text-nc-ink-dim normal-case tracking-normal">
+                      ({hourPrice.source === 'dam' ? 'DAM' : 'RT'})
+                    </span>
+                  ) : null}
+                </div>
                 <div className="font-mono text-lg font-semibold text-nc-num tabular-nums">
-                  {priceData && priceData.currentPriceMwh !== null ? (
-                    <>${priceData.currentPriceMwh.toFixed(2)}<span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span></>
+                  {hourPrice ? (
+                    <>${hourPrice.priceMwh.toFixed(2)}<span className="text-[10px] text-nc-ink-dim font-normal ml-0.5">/MWh</span></>
                   ) : (
-                    <span className="text-nc-ink-dim">—</span>
+                    <span className="text-nc-ink-dim text-sm font-normal">No price for hour</span>
                   )}
                 </div>
               </div>

@@ -113,8 +113,13 @@ export function calculateArbWindows(damPrices: SppPrice[]): ArbEdge {
     a.timestamp.localeCompare(b.timestamp)
   );
 
-  // Take next 24 hours
-  const horizonPrices = sortedPrices.slice(0, DAM_HORIZON_HOURS);
+  // Prefer the upcoming horizon from "now" so a multi-day DAM series does not
+  // pin arb windows to the oldest day in the backfill.
+  const nowIso = new Date().toISOString();
+  const upcoming = sortedPrices.filter((p) => p.timestamp >= nowIso);
+  const horizonPrices = (
+    upcoming.length > 0 ? upcoming : sortedPrices.slice(-DAM_HORIZON_HOURS)
+  ).slice(0, DAM_HORIZON_HOURS);
 
   if (horizonPrices.length === 0) {
     return {
@@ -169,6 +174,81 @@ export function calculateArbWindows(damPrices: SppPrice[]): ArbEdge {
     explanation: hasEdge
       ? `$${spreadMwh.toFixed(2)}/MWh spread (charge @$${minPrice.priceMwh.toFixed(2)}, discharge @$${maxPrice.priceMwh.toFixed(2)})`
       : `No arb edge — spread $${spreadMwh.toFixed(2)}/MWh < $${ARB_EDGE_THRESHOLD_MWH} threshold`,
+  };
+}
+
+
+/**
+ * Build the same hourKey format used by ERCOT grid hourlyData
+ * (`YYYY-MM-DD HH:00`, hourEnding 24 → 00:00).
+ */
+export function sppHourKey(price: Pick<SppPrice, 'deliveryDate' | 'hourEnding'>): string {
+  const displayHour = price.hourEnding === 24 ? 0 : price.hourEnding;
+  return `${price.deliveryDate} ${String(displayHour).padStart(2, '0')}:00`;
+}
+
+export type HourScopedPriceHit = {
+  priceMwh: number;
+  source: 'dam' | 'rt';
+  hourKey: string;
+};
+
+/**
+ * Look up an honest hour-scoped SPP for a slider hourKey.
+ * Prefer DAM (hourly product). Fall back to RT intervals mapped to the same hour.
+ * Returns null when that hour has no price — never invent or reuse "latest RT".
+ */
+export function findPriceForHourKey(
+  priceData: PriceCacheData | null | undefined,
+  hourKey: string | null | undefined,
+): HourScopedPriceHit | null {
+  if (!priceData || !hourKey) return null;
+
+  for (const p of priceData.damPrices) {
+    if (sppHourKey(p) === hourKey) {
+      return { priceMwh: p.priceMwh, source: 'dam', hourKey };
+    }
+  }
+
+  // RT timestamps are interval starts; match any interval in that clock hour.
+  for (const p of priceData.rtPrices) {
+    if (sppHourKey(p) === hourKey) {
+      return { priceMwh: p.priceMwh, source: 'rt', hourKey };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Merge DAM/RT series by hourKey (and RT timestamp), preferring incoming points
+ * on conflict so a short live poll does not erase a 7-day backfill.
+ */
+export function mergePriceSeries(
+  existing: PriceCacheData | null | undefined,
+  incoming: PriceCacheData,
+): PriceCacheData {
+  if (!existing) return incoming;
+
+  const damByKey = new Map<string, SppPrice>();
+  for (const p of existing.damPrices) damByKey.set(sppHourKey(p), p);
+  for (const p of incoming.damPrices) damByKey.set(sppHourKey(p), p);
+
+  const rtByTs = new Map<string, SppPrice>();
+  for (const p of existing.rtPrices) rtByTs.set(p.timestamp, p);
+  for (const p of incoming.rtPrices) rtByTs.set(p.timestamp, p);
+
+  const damPrices = [...damByKey.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const rtPrices = [...rtByTs.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  const currentPriceMwh = incoming.currentPriceMwh ?? existing.currentPriceMwh;
+  const arbEdge = calculateArbWindows(damPrices);
+
+  return {
+    ...incoming,
+    currentPriceMwh,
+    rtPrices,
+    damPrices,
+    arbEdge,
   };
 }
 

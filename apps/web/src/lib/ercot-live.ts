@@ -47,7 +47,7 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot, SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
-import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
+import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT, mergePriceSeries } from '@fleetfail/engine';
 import { getCache } from '@vercel/functions';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
@@ -380,8 +380,11 @@ async function loadLastGoodGrid(): Promise<ErcotCacheData | null> {
  * Call ONLY on successful live fetch.
  */
 async function saveLastGoodPrices(data: PriceCacheData): Promise<void> {
+  // Merge with existing last-good so a short live poll cannot erase a 7-day DAM backfill.
+  const previous = await loadLastGoodPrices(data.settlementPoint);
+  const merged = mergePriceSeries(previous, data);
   const cachedData: PriceCacheData = {
-    ...data,
+    ...merged,
     dataSource: 'cached',
   };
   
@@ -1446,17 +1449,29 @@ export async function fetchSppRealTime(
  * @param settlementPoint - Settlement point to filter (default: HB_HUBAVG)
  */
 export async function fetchSppDayAhead(
-  settlementPoint: string = DEFAULT_SETTLEMENT_POINT
+  settlementPoint: string = DEFAULT_SETTLEMENT_POINT,
+  options?: { deliveryDateFrom?: string; deliveryDateTo?: string; size?: number }
 ): Promise<SppPrice[]> {
   const token = await getAccessToken();
   const client = createApiClient(token);
+
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 7);
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 1);
+  const deliveryDateFrom = options?.deliveryDateFrom ?? fromDate.toISOString().split('T')[0]!;
+  const deliveryDateTo = options?.deliveryDateTo ?? toDate.toISOString().split('T')[0]!;
+  const size = options?.size ?? 200;
   
   const response = await client.get<ErcotApiResponse<DamSppApiRecord>>(
     '/np4-190-cd/dam_stlmnt_pnt_prices',
     {
       params: {
         settlementPoint,
-        size: 48,
+        size,
+        deliveryDateFrom,
+        deliveryDateTo,
       },
     }
   );
@@ -1673,6 +1688,8 @@ export interface BackfillResult {
   hoursWritten: number;
   actualHours: number;
   forecastHours: number;
+  /** DAM SPP hours written into last-good prices (0 if price backfill skipped/failed) */
+  priceHoursWritten: number;
   range: { first: string | null; last: string | null };
   uniqueDates: string[];
   dataSource: 'backfill' | 'partial' | 'error';
@@ -1807,6 +1824,7 @@ export async function executeBackfill(): Promise<BackfillResult> {
     return {
       ok: false,
       hoursWritten: 0,
+      priceHoursWritten: 0,
       actualHours: 0,
       forecastHours: 0,
       range: { first: null, last: null },
@@ -1843,6 +1861,7 @@ export async function executeBackfill(): Promise<BackfillResult> {
     return {
       ok: false,
       hoursWritten: 0,
+      priceHoursWritten: 0,
       actualHours: 0,
       forecastHours: 0,
       range: { first: null, last: null },
@@ -1932,6 +1951,7 @@ export async function executeBackfill(): Promise<BackfillResult> {
     return {
       ok: false,
       hoursWritten: 0,
+      priceHoursWritten: 0,
       actualHours: 0,
       forecastHours: 0,
       range: { first: null, last: null },
@@ -1963,6 +1983,7 @@ export async function executeBackfill(): Promise<BackfillResult> {
     return {
       ok: false,
       hoursWritten: 0,
+      priceHoursWritten: 0,
       actualHours: 0,
       forecastHours: 0,
       range: { first: null, last: null },
@@ -1986,12 +2007,41 @@ export async function executeBackfill(): Promise<BackfillResult> {
   };
   
   await saveLastGoodGrid(backfillCacheData);
+
+  // Hour-scoped DAM SPP into last-good prices (same 7d window; honest — no invented prices)
+  let priceHoursWritten = 0;
+  try {
+    if (Date.now() - startTime < BACKFILL_MAX_DURATION_MS - 5000 && !isCircuitBreakerOpen()) {
+      await sleep(BACKFILL_PAGE_DELAY_MS);
+      const damPrices = await executeWithRetry({
+        execute: () => fetchSppDayAhead(DEFAULT_SETTLEMENT_POINT, {
+          deliveryDateFrom,
+          deliveryDateTo,
+          size: 200,
+        }),
+        description: 'DAM SPP backfill',
+      });
+      if (damPrices.length > 0) {
+        const priceCache = buildPriceCacheData([], damPrices, DEFAULT_SETTLEMENT_POINT, 'live');
+        await saveLastGoodPrices(priceCache);
+        // Refresh DAM memory TTL so polling does not immediately refetch a short window
+        damSppCache.set(DEFAULT_SETTLEMENT_POINT, createCacheEntry(damPrices, DAM_SPP_TTL_MS));
+        priceHoursWritten = damPrices.length;
+        console.log(`Backfill: wrote ${priceHoursWritten} DAM SPP hours into last-good prices`);
+      } else {
+        console.warn('Backfill: DAM SPP returned 0 rows for range', deliveryDateFrom, deliveryDateTo);
+      }
+    }
+  } catch (err) {
+    console.warn('Backfill: DAM SPP price step failed (grid backfill still saved):', err);
+  }
   
   return {
     ok: true,
     hoursWritten: cacheData.hourlyData.length,
     actualHours: actualSnapshots.length,
     forecastHours: forecastSnapshots.length,
+    priceHoursWritten,
     range: {
       first: sortedHours[0]?.hourKey ?? null,
       last: sortedHours[sortedHours.length - 1]?.hourKey ?? null,

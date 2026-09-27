@@ -131,6 +131,9 @@ export {
 export {
   calculateArbWindows,
   createUnavailablePriceCache,
+  sppHourKey,
+  findPriceForHourKey,
+  mergePriceSeries,
   ARB_EDGE_THRESHOLD_MWH,
   DEFAULT_SETTLEMENT_POINT,
   DAM_HORIZON_HOURS,
@@ -138,6 +141,7 @@ export {
   type ArbWindow,
   type ArbEdge,
   type PriceCacheData,
+  type HourScopedPriceHit,
 } from './ercot-prices.js';
 
 // ERCOT API utilities
