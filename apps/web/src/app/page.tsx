@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
 import { HourSlider } from '@/components/HourSlider';
@@ -30,10 +30,14 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [deviceCount, setDeviceCount] = useState(50);
   const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
+  
+  const selectedHourKeyRef = useRef<string | null>(null);
+  selectedHourKeyRef.current = selectedHourKey;
 
   const fetchState = useCallback(async () => {
     try {
-      const hourParam = selectedHourKey ? `?hourKey=${encodeURIComponent(selectedHourKey)}` : '';
+      const currentHourKey = selectedHourKeyRef.current;
+      const hourParam = currentHourKey ? `?hourKey=${encodeURIComponent(currentHourKey)}` : '';
       const [stateRes, ercotRes, cachedErcotRes, priceRes] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/ercot'),
@@ -51,13 +55,13 @@ export default function Home() {
       setCachedErcotData(cachedErcotDataRes);
       setPriceData(priceDataRes);
       
-      if (!selectedHourKey && cachedErcotDataRes.currentHourKey) {
+      if (!selectedHourKeyRef.current && cachedErcotDataRes.currentHourKey) {
         setSelectedHourKey(cachedErcotDataRes.currentHourKey);
       }
     } catch (error) {
       console.error('Failed to fetch state:', error);
     }
-  }, [selectedHourKey]);
+  }, []);
 
   useEffect(() => {
     fetchState();
@@ -122,6 +126,22 @@ export default function Home() {
     }
   };
 
+
+  // Device name map - must be before early return to satisfy hooks rules
+  const deviceNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const devices = state?.devices ?? [];
+    for (const d of devices) {
+      map.set(d.id, d.name);
+    }
+    return map;
+  }, [state?.devices]);
+
+  const deviceIdToName = (deviceId: string | null): string => {
+    if (!deviceId) return '';
+    return deviceNameMap.get(deviceId) ?? deviceId;
+  };
+
   if (!state) {
     return (
       <div className="h-screen flex items-center justify-center bg-nc-bg">
@@ -130,9 +150,15 @@ export default function Home() {
     );
   }
 
-  const { metrics, devices, events, activeDispatch, isRunning } = state;
-  const progressPct = metrics.dispatchTargetKw > 0 
-    ? (metrics.deliveredKw / metrics.dispatchTargetKw) * 100 
+  const { 
+    metrics = {} as FleetMetrics, 
+    devices = [], 
+    events = [], 
+    activeDispatch, 
+    isRunning 
+  } = state;
+  const progressPct = (metrics?.dispatchTargetKw ?? 0) > 0 
+    ? ((metrics?.deliveredKw ?? 0) / metrics.dispatchTargetKw) * 100 
     : 0;
 
   const eventColors: Record<string, string> = {
@@ -154,23 +180,24 @@ export default function Home() {
     COMMAND_EXPIRED: 'text-nc-ink-dim',
   };
 
+
   const formatEventMessage = (event: FleetEvent): string => {
     const details = event.details as Record<string, unknown> | undefined;
     if (event.type === 'COMMAND_SENT') {
-      return `target=${metrics.dispatchTargetKw}kW ${event.commandId ? `id=${event.commandId.slice(0, 12)}` : ''}`;
+      return `target=${metrics?.dispatchTargetKw ?? 0}kW ${event.commandId ? `id=${event.commandId.slice(0, 12)}` : ''}`;
     }
     if (event.type === 'DEVICE_OFFLINE' || event.type === 'DEVICE_RECONNECTED') {
-      return event.deviceId ? `${event.deviceId.slice(0, 8)} ${details?.zone || ''}` : '';
+      return event.deviceId ? `${deviceIdToName(event.deviceId)} ${details?.zone || ''}` : '';
     }
     if (event.type === 'REALLOCATED') {
       const kw = details?.reallocatedKw;
       return kw ? `${kw}kW redistributed` : 'power redistributed';
     }
     if (event.type === 'STALE_REJECTED') {
-      return event.deviceId ? `${event.deviceId.slice(0, 8)}` : '';
+      return event.deviceId ? deviceIdToName(event.deviceId) : '';
     }
     if (event.deviceId) {
-      return event.deviceId.slice(0, 8);
+      return deviceIdToName(event.deviceId);
     }
     return '';
   };
