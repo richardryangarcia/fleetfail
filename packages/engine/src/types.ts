@@ -131,7 +131,11 @@ export type EventType =
   | 'DISPATCH_PARTIAL'
   | 'DISPATCH_INSUFFICIENT'
   | 'COMMAND_ACKED'
-  | 'COMMAND_EXPIRED';
+  | 'COMMAND_EXPIRED'
+  | 'ARB_ARMED'
+  | 'ARB_DISARMED'
+  | 'ARB_CHARGE_WINDOW'
+  | 'ARB_DISCHARGE_WINDOW';
 
 export interface FleetEvent {
   id: string;

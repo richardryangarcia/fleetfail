@@ -1,10 +1,26 @@
-import { Orchestrator, type FleetMetrics, type FleetEvent, type Device, type Command, type Dispatch } from '@fleetfail/engine';
+import { Orchestrator, type FleetMetrics, type FleetEvent, type Device, type Command, type Dispatch, type ArbWindow, events } from '@fleetfail/engine';
 
 const DEFAULT_DEVICE_COUNT = 20000;
 
 let orchestrator: Orchestrator | null = null;
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 let isRunning = false;
+
+export interface ArbModeState {
+  armed: boolean;
+  chargeWindow: ArbWindow | null;
+  dischargeWindow: ArbWindow | null;
+  spreadMwh: number;
+  armedAt: number | null;
+}
+
+let arbModeState: ArbModeState = {
+  armed: false,
+  chargeWindow: null,
+  dischargeWindow: null,
+  spreadMwh: 0,
+  armedAt: null,
+};
 
 export function getOrchestrator(): Orchestrator {
   if (!orchestrator) {
@@ -24,6 +40,7 @@ export function getOrchestrator(): Orchestrator {
 
 export function resetOrchestrator(seed?: number, deviceCount: number = DEFAULT_DEVICE_COUNT): void {
   stopSimulation();
+  disarmArbMode();
   orchestrator = new Orchestrator({
     seed: seed ?? Date.now(),
     ackTimeoutMs: 3000,
@@ -34,6 +51,57 @@ export function resetOrchestrator(seed?: number, deviceCount: number = DEFAULT_D
     maxAcksPerTick: 1,
   });
   orchestrator.seedFleet(deviceCount, Date.now());
+}
+
+export function armArbMode(
+  chargeWindow: ArbWindow | null, 
+  dischargeWindow: ArbWindow | null, 
+  spreadMwh: number
+): ArbModeState {
+  const orch = getOrchestrator();
+  const timestamp = orch.getCurrentTime() || Date.now();
+  
+  arbModeState = {
+    armed: true,
+    chargeWindow,
+    dischargeWindow,
+    spreadMwh,
+    armedAt: timestamp,
+  };
+  
+  const arbArmedEvent = events.arbArmed(
+    timestamp,
+    chargeWindow?.hourEnding ?? 0,
+    dischargeWindow?.hourEnding ?? 0,
+    spreadMwh
+  );
+  orch.getState().events.push(arbArmedEvent);
+  
+  return arbModeState;
+}
+
+export function disarmArbMode(): ArbModeState {
+  const wasArmed = arbModeState.armed;
+  
+  arbModeState = {
+    armed: false,
+    chargeWindow: null,
+    dischargeWindow: null,
+    spreadMwh: 0,
+    armedAt: null,
+  };
+  
+  if (wasArmed && orchestrator) {
+    const timestamp = orchestrator.getCurrentTime() || Date.now();
+    const arbDisarmedEvent = events.arbDisarmed(timestamp);
+    orchestrator.getState().events.push(arbDisarmedEvent);
+  }
+  
+  return arbModeState;
+}
+
+export function getArbModeState(): ArbModeState {
+  return { ...arbModeState };
 }
 
 export function startSimulation(): void {
@@ -71,6 +139,7 @@ export interface SimulationState {
   activeDispatch: Dispatch | null;
   isRunning: boolean;
   currentTime: number;
+  arbMode: ArbModeState;
 }
 
 export function getSimulationState(): SimulationState {
@@ -83,5 +152,41 @@ export function getSimulationState(): SimulationState {
     activeDispatch: orch.getActiveDispatch() ?? null,
     isRunning,
     currentTime: orch.getCurrentTime(),
+    arbMode: getArbModeState(),
   };
+}
+
+export function executeArbDispatch(
+  targetKw: number, 
+  windowType: 'charge' | 'discharge',
+  priceMwh: number,
+  hourEnding: number
+): Dispatch | null {
+  const orch = getOrchestrator();
+  const timestamp = orch.getCurrentTime() || Date.now();
+  
+  const dispatch = orch.startDispatch(targetKw);
+  startSimulation();
+  
+  if (windowType === 'charge') {
+    const chargeEvent = events.arbChargeWindow(
+      timestamp, 
+      dispatch.id, 
+      targetKw, 
+      priceMwh, 
+      hourEnding
+    );
+    orch.getState().events.push(chargeEvent);
+  } else {
+    const dischargeEvent = events.arbDischargeWindow(
+      timestamp, 
+      dispatch.id, 
+      targetKw, 
+      priceMwh, 
+      hourEnding
+    );
+    orch.getState().events.push(dischargeEvent);
+  }
+  
+  return dispatch;
 }
