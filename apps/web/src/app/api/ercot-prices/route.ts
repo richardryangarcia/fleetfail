@@ -19,6 +19,7 @@ import { createUnavailablePriceCache, DEFAULT_SETTLEMENT_POINT, type PriceCacheD
 import { fetchLiveErcotPrices, hasErcotCredentials } from '@/lib/ercot-live';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 let cachedPriceData: { data: PriceCacheData; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP (ercot-live RT_SPP_TTL_MS)
