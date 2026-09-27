@@ -3,7 +3,9 @@ import {
   calculateArbWindows,
   createUnavailablePriceCache,
   sppHourKey,
+  hourKeyToAnchorIso,
   findPriceForHourKey,
+  findArbWindowsForHourKey,
   mergePriceSeries,
   ARB_EDGE_THRESHOLD_MWH,
   DEFAULT_SETTLEMENT_POINT,
@@ -260,5 +262,78 @@ describe('hour-scoped prices', () => {
     const merged = mergePriceSeries(sample, incoming);
     expect(merged.damPrices).toHaveLength(2);
     expect(merged.damPrices.map((p) => p.priceMwh).sort((a, b) => a - b)).toEqual([12, 35]);
+  });
+});
+
+
+describe('hour-anchored display arb windows', () => {
+  const multiDay: SppPrice[] = [];
+  // Day A — low overnight / high afternoon
+  for (let i = 0; i < 24; i++) {
+    multiDay.push({
+      settlementPoint: 'HB_HUBAVG',
+      timestamp: `2026-09-20T${String(i).padStart(2, '0')}:00:00.000Z`,
+      priceMwh: i === 3 ? 12.00 : i === 17 ? 90.00 : 40.00,
+      hourEnding: i === 0 ? 24 : i,
+      deliveryDate: '2026-09-20',
+    });
+  }
+  // Day B — different min/max
+  for (let i = 0; i < 24; i++) {
+    multiDay.push({
+      settlementPoint: 'HB_HUBAVG',
+      timestamp: `2026-09-21T${String(i).padStart(2, '0')}:00:00.000Z`,
+      priceMwh: i === 5 ? 15.00 : i === 16 ? 75.00 : 42.00,
+      hourEnding: i === 0 ? 24 : i,
+      deliveryDate: '2026-09-21',
+    });
+  }
+
+  const priceData: PriceCacheData = {
+    cachedAt: new Date().toISOString(),
+    dataSource: 'live',
+    settlementPoint: 'HB_HUBAVG',
+    currentPriceMwh: 40,
+    rtPrices: [],
+    damPrices: multiDay,
+    arbEdge: {
+      hasEdge: false,
+      spreadMwh: 0,
+      chargeWindow: null,
+      dischargeWindow: null,
+      explanation: 'test',
+    },
+    snapshotId: 'TEST-ANCHOR',
+  };
+
+  it('hourKeyToAnchorIso maps hourKey to DAM timestamp form', () => {
+    expect(hourKeyToAnchorIso('2026-09-20 14:00')).toBe('2026-09-20T14:00:00.000Z');
+    expect(hourKeyToAnchorIso('bad')).toBeNull();
+  });
+
+  it('findArbWindowsForHourKey anchors horizon on selectedHourKey', () => {
+    const dayA = findArbWindowsForHourKey(priceData, '2026-09-20 00:00');
+    expect(dayA.chargeWindow!.priceMwh).toBe(12.00);
+    expect(dayA.chargeWindow!.hourEnding).toBe(3);
+    expect(dayA.dischargeWindow!.priceMwh).toBe(90.00);
+
+    const dayB = findArbWindowsForHourKey(priceData, '2026-09-21 00:00');
+    expect(dayB.chargeWindow!.priceMwh).toBe(15.00);
+    expect(dayB.chargeWindow!.hourEnding).toBe(5);
+    expect(dayB.dischargeWindow!.priceMwh).toBe(75.00);
+  });
+
+  it('returns empty windows when no DAM prices at/after selected hour', () => {
+    const past = findArbWindowsForHourKey(priceData, '2026-09-25 12:00');
+    expect(past.chargeWindow).toBeNull();
+    expect(past.dischargeWindow).toBeNull();
+    expect(past.explanation).toContain('No DAM price data in horizon');
+  });
+
+  it('calculateArbWindows with explicit anchorIso matches helper', () => {
+    const viaOpts = calculateArbWindows(multiDay, { anchorIso: '2026-09-21T00:00:00.000Z' });
+    const viaHelper = findArbWindowsForHourKey(priceData, '2026-09-21 00:00');
+    expect(viaOpts.chargeWindow!.priceMwh).toBe(viaHelper.chargeWindow!.priceMwh);
+    expect(viaOpts.dischargeWindow!.priceMwh).toBe(viaHelper.dischargeWindow!.priceMwh);
   });
 });

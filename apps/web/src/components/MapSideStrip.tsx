@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { FleetMetrics, Dispatch, ErcotCacheData, PriceCacheData, ArbWindow } from '@fleetfail/engine';
-import { findPriceForHourKey } from '@fleetfail/engine/ercot-prices';
+import { findPriceForHourKey, findArbWindowsForHourKey } from '@fleetfail/engine/ercot-prices';
 import Link from 'next/link';
 
 const MAP_DEFAULT_TARGET_KW = 1500;
@@ -97,6 +97,19 @@ export function MapSideStrip({
   const hourPriceLabel = hourPrice
     ? hourPrice.source === 'dam' ? 'DAM' : 'RT'
     : null;
+  // Display-only: charge/discharge track selectedHourKey. Arm still uses wall-clock arbEdge.
+  const displayArb = findArbWindowsForHourKey(priceData, selectedHourKey);
+  const hourSummary =
+    (selectedHourKey && ercotData?.hourlyData?.find(h => h.hourKey === selectedHourKey)?.gridSummary)
+    || ercotData?.gridSummary
+    || null;
+  const hasRenewables =
+    hourSummary != null &&
+    typeof hourSummary.totalWindMw === 'number' &&
+    typeof hourSummary.totalSolarMw === 'number';
+  const netLoadMw = hasRenewables && hourSummary
+    ? hourSummary.totalLoadMw - hourSummary.totalWindMw - hourSummary.totalSolarMw
+    : null;
 
   return (
     <div className="w-80 bg-nc-panel border-l border-nc-line-strong flex flex-col h-full overflow-y-auto">
@@ -141,30 +154,45 @@ export function MapSideStrip({
             <span className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">ERCOT Grid</span>
             <span className="text-[9px] text-nc-ink-mute tracking-wide">SYNTHETIC</span>
           </div>
-          {/* ERCOT Data Source Badge */}
-          <div className="mb-2">
-            {ercotData.dataSource === 'live' ? (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#0a1810] text-nc-ok border border-[#1e4a32]">
-                <span className="w-1.5 h-1.5 bg-nc-ok rounded-full animate-pulse" />
-                LIVE
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-warn border border-nc-line">
-                Cached / Replay — Live ERCOT unavailable
-              </span>
-            )}
-          </div>
           <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
             <div>
               <span className="text-nc-ink-mute">Load</span>
               <div className="text-nc-ink tabular-nums">
-                {(ercotData.gridSummary.totalLoadMw / 1000).toFixed(2)} GW
+                {hourSummary
+                  ? `${(hourSummary.totalLoadMw / 1000).toFixed(2)} GW`
+                  : 'Unavailable'}
               </div>
             </div>
             <div>
               <span className="text-nc-ink-mute">Freq</span>
               <div className="text-nc-ink tabular-nums">
-                {ercotData.gridSummary.frequencyHz.toFixed(2)} Hz
+                {hourSummary
+                  ? `${hourSummary.frequencyHz.toFixed(2)} Hz`
+                  : 'Unavailable'}
+              </div>
+            </div>
+            <div>
+              <span className="text-nc-ink-mute">Wind</span>
+              <div className={`tabular-nums ${hasRenewables ? 'text-nc-ink' : 'text-nc-ink-dim'}`}>
+                {hasRenewables
+                  ? `${(hourSummary!.totalWindMw / 1000).toFixed(2)} GW`
+                  : 'Unavailable'}
+              </div>
+            </div>
+            <div>
+              <span className="text-nc-ink-mute">Solar</span>
+              <div className={`tabular-nums ${hasRenewables ? 'text-nc-ink' : 'text-nc-ink-dim'}`}>
+                {hasRenewables
+                  ? `${(hourSummary!.totalSolarMw / 1000).toFixed(2)} GW`
+                  : 'Unavailable'}
+              </div>
+            </div>
+            <div>
+              <span className="text-nc-ink-mute">Net-load</span>
+              <div className={`tabular-nums ${netLoadMw != null ? 'text-nc-ink' : 'text-nc-ink-dim'}`}>
+                {netLoadMw != null
+                  ? `${(netLoadMw / 1000).toFixed(2)} GW`
+                  : 'Unavailable'}
               </div>
             </div>
           </div>
@@ -210,41 +238,41 @@ export function MapSideStrip({
               <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                 Charge <span className="text-nc-ok">(low)</span>
               </div>
-              {priceData?.arbEdge?.chargeWindow ? (
+              {displayArb.chargeWindow ? (
                 <div className="font-mono text-xs text-nc-ink">
-                  <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
+                  <span className="text-nc-ok font-semibold">${displayArb.chargeWindow.priceMwh.toFixed(2)}</span>
                   <span className="text-nc-ink-dim text-[9px] ml-1">
-                    @{priceData.arbEdge.chargeWindow.hourEnding}:00
+                    @{displayArb.chargeWindow.hourEnding}:00
                   </span>
                 </div>
               ) : (
-                <div className="font-mono text-xs text-nc-ink-dim">—</div>
+                <div className="font-mono text-xs text-nc-ink-dim">Unavailable</div>
               )}
             </div>
             <div>
               <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                 Discharge <span className="text-nc-accent">(high)</span>
               </div>
-              {priceData?.arbEdge?.dischargeWindow ? (
+              {displayArb.dischargeWindow ? (
                 <div className="font-mono text-xs text-nc-ink">
-                  <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
+                  <span className="text-nc-accent font-semibold">${displayArb.dischargeWindow.priceMwh.toFixed(2)}</span>
                   <span className="text-nc-ink-dim text-[9px] ml-1">
-                    @{priceData.arbEdge.dischargeWindow.hourEnding}:00
+                    @{displayArb.dischargeWindow.hourEnding}:00
                   </span>
                 </div>
               ) : (
-                <div className="font-mono text-xs text-nc-ink-dim">—</div>
+                <div className="font-mono text-xs text-nc-ink-dim">Unavailable</div>
               )}
             </div>
           </div>
-          {priceData?.currentPriceMwh !== null && priceData?.arbEdge && !priceData.arbEdge.hasEdge && (
+          {displayArb.chargeWindow && !displayArb.hasEdge && (
             <div className="text-[9px] font-mono text-nc-warn">
               No arb edge — spread &lt;$5/MWh
             </div>
           )}
-          {priceData?.arbEdge?.hasEdge && (
+          {displayArb.hasEdge && (
             <div className="text-[9px] font-mono text-nc-ok">
-              ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread
+              ${displayArb.spreadMwh.toFixed(2)}/MWh spread
             </div>
           )}
           {!hourPrice && (

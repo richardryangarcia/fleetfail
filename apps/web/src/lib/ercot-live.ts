@@ -584,9 +584,12 @@ const CANONICAL_FIELD_ALIASES: Record<string, string> = {
   farwest: 'farWest',
   north: 'north',
   northcentral: 'northCentral',
+  northc: 'northCentral',
   southcentral: 'southCentral',
+  southc: 'southCentral',
   southern: 'southern',
   west: 'west',
+  total: 'systemTotal',
   actual: 'actual',
   stppf: 'stppf',
   wgrpp: 'wgrpp',
@@ -600,6 +603,61 @@ const CANONICAL_FIELD_ALIASES: Record<string, string> = {
   deliveryhour: 'deliveryHour',
   deliveryinterval: 'deliveryInterval',
   repeathourflag: 'repeatHourFlag',
+  posteddatetime: 'postedDatetime',
+  dstflag: 'dstFlag',
+  // Wind wide columns (np4-742-cd) — avoid STWPFSystemWide → sTWPFSystemWide mangling
+  gensystemwide: 'genSystemWide',
+  genpanhandle: 'genPanhandle',
+  gencoastal: 'genCoastal',
+  gensouth: 'genSouth',
+  genwest: 'genWest',
+  gennorth: 'genNorth',
+  stwpfsystemwide: 'stwpfSystemWide',
+  stwpfpanhandle: 'stwpfPanhandle',
+  stwpfcoastal: 'stwpfCoastal',
+  stwpfsouth: 'stwpfSouth',
+  stwpfwest: 'stwpfWest',
+  stwpfnorth: 'stwpfNorth',
+  wgrppsystemwide: 'wgrppSystemWide',
+  wgrpppanhandle: 'wgrppPanhandle',
+  wgrppcoastal: 'wgrppCoastal',
+  wgrppsouth: 'wgrppSouth',
+  wgrppwest: 'wgrppWest',
+  wgrppnorth: 'wgrppNorth',
+  cophslsystemwide: 'copHslSystemWide',
+  cophslpanhandle: 'copHslPanhandle',
+  cophslcoastal: 'copHslCoastal',
+  cophslsouth: 'copHslSouth',
+  cophslwest: 'copHslWest',
+  cophslnorth: 'copHslNorth',
+  hslsystemwide: 'hslSystemWide',
+  // Solar wide columns (np4-745-cd)
+  gencenterwest: 'genCenterWest',
+  gennorthwest: 'genNorthWest',
+  genfarwest: 'genFarWest',
+  genfareast: 'genFarEast',
+  gensoutheast: 'genSouthEast',
+  gencentereast: 'genCenterEast',
+  stppfsystemwide: 'stppfSystemWide',
+  stppfcenterwest: 'stppfCenterWest',
+  stppfnorthwest: 'stppfNorthWest',
+  stppffarwest: 'stppfFarWest',
+  stppffareast: 'stppfFarEast',
+  stppfsoutheast: 'stppfSouthEast',
+  stppfcentereast: 'stppfCenterEast',
+  pvgrppsystemwide: 'pvgrppSystemWide',
+  pvgrppcenterwest: 'pvgrppCenterWest',
+  pvgrppnorthwest: 'pvgrppNorthWest',
+  pvgrppfarwest: 'pvgrppFarWest',
+  pvgrppfareast: 'pvgrppFarEast',
+  pvgrppsoutheast: 'pvgrppSouthEast',
+  pvgrppcentereast: 'pvgrppCenterEast',
+  cophslcenterwest: 'copHslCenterWest',
+  cophslnorthwest: 'copHslNorthWest',
+  cophslfarwest: 'copHslFarWest',
+  cophslfareast: 'copHslFarEast',
+  cophslsoutheast: 'copHslSouthEast',
+  cophslcentereast: 'copHslCenterEast',
 };
 
 /**
@@ -797,6 +855,144 @@ interface SolarActualForecast {
   geoRegion?: string;
 }
 
+/**
+ * ERCOT wind (np4-742) and solar (np4-745) return WIDE rows: one row per hour with
+ * gen{Region}/STWPF{Region}/STPPF{Region} columns — not long-format actual/stppf/geoRegion.
+ * Without expansion, buildErcotCacheData reads w.actual ?? w.stppf → always 0.
+ */
+const WIND_WIDE_REGIONS: { suffix: string; geoRegion: string }[] = [
+  { suffix: 'Panhandle', geoRegion: 'PANHANDLE' },
+  { suffix: 'Coastal', geoRegion: 'COASTAL' },
+  { suffix: 'South', geoRegion: 'SOUTH' },
+  { suffix: 'West', geoRegion: 'WEST' },
+  { suffix: 'North', geoRegion: 'NORTH' },
+];
+
+const SOLAR_WIDE_REGIONS: { suffix: string; geoRegion: string }[] = [
+  { suffix: 'CenterWest', geoRegion: 'CENTER_WEST' },
+  { suffix: 'NorthWest', geoRegion: 'NORTH_WEST' },
+  { suffix: 'FarWest', geoRegion: 'FAR_WEST' },
+  { suffix: 'FarEast', geoRegion: 'FAR_EAST' },
+  { suffix: 'SouthEast', geoRegion: 'SOUTH_EAST' },
+  { suffix: 'CenterEast', geoRegion: 'CENTER_EAST' },
+];
+
+let loggedRenewableWideSample = false;
+
+function numOrUndef(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function isWindWideRow(row: Record<string, unknown>): boolean {
+  return 'genSystemWide' in row || 'stwpfSystemWide' in row || 'sTWPFSystemWide' in row;
+}
+
+function isSolarWideRow(row: Record<string, unknown>): boolean {
+  return 'genSystemWide' in row || 'stppfSystemWide' in row || 'sTPPFSystemWide' in row;
+}
+
+/**
+ * Wind/solar endpoints return multiple postedDatetime revisions per deliveryDate+hourEnding.
+ * Summing them inflates MW ~Nx — keep latest post, preferring rows with actual gen present.
+ */
+function dedupeWideByHourLatest(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const key = `${row.deliveryDate ?? ''}|${row.hourEnding ?? ''}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, row);
+      continue;
+    }
+    const existingHasGen = existing.genSystemWide != null;
+    const newHasGen = row.genSystemWide != null;
+    if (newHasGen && !existingHasGen) {
+      byKey.set(key, row);
+      continue;
+    }
+    if (newHasGen === existingHasGen) {
+      const existingPosted = String(existing.postedDatetime ?? '');
+      const newPosted = String(row.postedDatetime ?? '');
+      if (newPosted > existingPosted) {
+        byKey.set(key, row);
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+function expandWindWideRows(rows: WindActualForecast[]): WindActualForecast[] {
+  if (rows.length === 0) return rows;
+  const first = rows[0] as Record<string, unknown>;
+  if (!isWindWideRow(first)) return rows;
+
+  const wideRows = dedupeWideByHourLatest(rows as unknown as Record<string, unknown>[]);
+
+  if (!loggedRenewableWideSample) {
+    loggedRenewableWideSample = true;
+    console.log('ERCOT renewable wide-row sample (wind, transformed):', JSON.stringify(wideRows[0]));
+  }
+
+  const out: WindActualForecast[] = [];
+  for (const row of wideRows) {
+    const deliveryDate = row.deliveryDate != null ? String(row.deliveryDate) : undefined;
+    const hourEnding = row.hourEnding != null ? String(row.hourEnding) : undefined;
+    let anyRegional = false;
+    for (const { suffix, geoRegion } of WIND_WIDE_REGIONS) {
+      const actual = numOrUndef(row[`gen${suffix}`]);
+      const stppf = numOrUndef(row[`stwpf${suffix}`] ?? row[`sTWPF${suffix}`]);
+      if (actual === undefined && stppf === undefined) continue;
+      anyRegional = true;
+      out.push({ deliveryDate, hourEnding, geoRegion, actual, stppf });
+    }
+    if (!anyRegional) {
+      const actual = numOrUndef(row.genSystemWide);
+      const stppf = numOrUndef(row.stwpfSystemWide ?? row.sTWPFSystemWide);
+      if (actual !== undefined || stppf !== undefined) {
+        out.push({ deliveryDate, hourEnding, geoRegion: 'SYSTEM', actual, stppf });
+      }
+    }
+  }
+  return out;
+}
+
+function expandSolarWideRows(rows: SolarActualForecast[]): SolarActualForecast[] {
+  if (rows.length === 0) return rows;
+  const first = rows[0] as Record<string, unknown>;
+  if (!isSolarWideRow(first)) return rows;
+
+  const wideRows = dedupeWideByHourLatest(rows as unknown as Record<string, unknown>[]);
+
+  if (!loggedRenewableWideSample) {
+    loggedRenewableWideSample = true;
+    console.log('ERCOT renewable wide-row sample (solar, transformed):', JSON.stringify(wideRows[0]));
+  }
+
+  const out: SolarActualForecast[] = [];
+  for (const row of wideRows) {
+    const deliveryDate = row.deliveryDate != null ? String(row.deliveryDate) : undefined;
+    const hourEnding = row.hourEnding != null ? String(row.hourEnding) : undefined;
+    let anyRegional = false;
+    for (const { suffix, geoRegion } of SOLAR_WIDE_REGIONS) {
+      const actual = numOrUndef(row[`gen${suffix}`]);
+      const stppf = numOrUndef(row[`stppf${suffix}`] ?? row[`sTPPF${suffix}`]);
+      if (actual === undefined && stppf === undefined) continue;
+      anyRegional = true;
+      out.push({ deliveryDate, hourEnding, geoRegion, actual, stppf });
+    }
+    if (!anyRegional) {
+      const actual = numOrUndef(row.genSystemWide);
+      const stppf = numOrUndef(row.stppfSystemWide ?? row.sTPPFSystemWide);
+      if (actual !== undefined || stppf !== undefined) {
+        out.push({ deliveryDate, hourEnding, geoRegion: 'SYSTEM', actual, stppf });
+      }
+    }
+  }
+  return out;
+}
+
 export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]> {
   const token = await getAccessToken();
   const client = createApiClient(token);
@@ -877,7 +1073,8 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
     },
   });
   
-  const data = transformErcotResponse<WindActualForecast>(response.data);
+  const data = expandWindWideRows(transformErcotResponse<WindActualForecast>(response.data));
+  console.log(`ERCOT wind: ${data.length} long rows after wide expand`);
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -908,8 +1105,9 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
         },
       });
       
-      const data = transformErcotResponse<SolarActualForecast>(response.data);
+      const data = expandSolarWideRows(transformErcotResponse<SolarActualForecast>(response.data));
       if (data.length > 0) {
+        console.log(`ERCOT solar: ${data.length} long rows after wide expand (path=${path})`);
         return sortByDeliveryDateHourDesc(data);
       }
     } catch (err: unknown) {
@@ -948,6 +1146,7 @@ const ZONE_KEY_TO_ID: Record<string, string> = {
 
 const GEO_REGION_TO_ZONES: Record<string, string[]> = {
   'COAST': ['COAST'],
+  'COASTAL': ['COAST'],
   'EAST': ['EAST'],
   'FAR_WEST': ['FAR_WEST'],
   'NORTH': ['NORTH'],
@@ -955,8 +1154,14 @@ const GEO_REGION_TO_ZONES: Record<string, string[]> = {
   'SOUTH_CENTRAL': ['SOUTH_C'],
   'SOUTHERN': ['SOUTHERN'],
   'SOUTH': ['SOUTHERN'],
-  'WEST': ['WEST'],
+  'WEST': ['WEST', 'FAR_WEST'],
   'PANHANDLE': ['NORTH'],
+  // Solar geographic regions (np4-745-cd)
+  'CENTER_WEST': ['WEST', 'SOUTH_C'],
+  'NORTH_WEST': ['WEST', 'NORTH'],
+  'FAR_EAST': ['EAST', 'NORTH_C'],
+  'SOUTH_EAST': ['SOUTHERN', 'COAST'],
+  'CENTER_EAST': ['SOUTH_C', 'EAST'],
   'SYSTEM': Object.values(ZONE_KEY_TO_ID),
 };
 
@@ -1757,9 +1962,11 @@ async function fetchWindPage(
     },
   });
   
-  const data = transformErcotResponse<WindActualForecast>(response.data);
+  const data = expandWindWideRows(transformErcotResponse<WindActualForecast>(response.data));
   const totalRecords = response.data.meta?.totalRecords ?? 0;
-  const hasMore = data.length === BACKFILL_PAGE_SIZE * 4 && (page + 1) * BACKFILL_PAGE_SIZE * 4 < totalRecords;
+  // hasMore based on raw page size before expand (wide rows → many long rows)
+  const rawLen = Array.isArray(response.data.data) ? response.data.data.length : data.length;
+  const hasMore = rawLen === BACKFILL_PAGE_SIZE * 4 && (page + 1) * BACKFILL_PAGE_SIZE * 4 < totalRecords;
   
   return { data, hasMore };
 }
@@ -1789,10 +1996,11 @@ async function fetchSolarPage(
         },
       });
       
-      const data = transformErcotResponse<SolarActualForecast>(response.data);
+      const rawLen = Array.isArray(response.data.data) ? response.data.data.length : 0;
+      const data = expandSolarWideRows(transformErcotResponse<SolarActualForecast>(response.data));
       if (data.length > 0) {
         const totalRecords = response.data.meta?.totalRecords ?? 0;
-        const hasMore = data.length === BACKFILL_PAGE_SIZE * 4 && (page + 1) * BACKFILL_PAGE_SIZE * 4 < totalRecords;
+        const hasMore = rawLen === BACKFILL_PAGE_SIZE * 4 && (page + 1) * BACKFILL_PAGE_SIZE * 4 < totalRecords;
         return { data, hasMore };
       }
     } catch (err: unknown) {

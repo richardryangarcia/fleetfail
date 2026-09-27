@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
-import { findPriceForHourKey } from '@fleetfail/engine/ercot-prices';
+import { findPriceForHourKey, findArbWindowsForHourKey } from '@fleetfail/engine/ercot-prices';
 import { HourSlider } from '@/components/HourSlider';
 
 const PRICE_REFRESH_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP TTL
@@ -407,7 +407,8 @@ export default function Home() {
   };
 
   const hourPrice = findPriceForHourKey(priceData, selectedHourKey);
-
+  // Display-only: charge/discharge track selectedHourKey. Arm still uses wall-clock arbEdge.
+  const displayArb = findArbWindowsForHourKey(priceData, selectedHourKey);
   return (
     <div className="h-screen flex flex-col max-w-[1440px] mx-auto border-l border-r border-nc-line">
       {/* Header - 44px */}
@@ -573,20 +574,7 @@ export default function Home() {
                   {cachedErcotData?.hourlyData?.find(h => h.hourKey === selectedHourKey)?.dataType === 'actual' ? 'ACTUAL' : 'FORECAST'}
                 </span>
               </div>
-              {/* ERCOT Data Source Badge */}
-              <div className="mb-2">
-                {cachedErcotData?.dataSource === 'live' ? (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#0a1810] text-nc-ok border border-[#1e4a32]">
-                    <span className="w-1.5 h-1.5 bg-nc-ok rounded-full animate-pulse" />
-                    LIVE
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-warn border border-nc-line">
-                    Cached / Replay — Live ERCOT unavailable
-                  </span>
-                )}
-              </div>
-              <ErcotMiniGrid ercotData={ercotData} cachedData={cachedErcotData} />
+              <ErcotMiniGrid ercotData={ercotData} cachedData={cachedErcotData} selectedHourKey={selectedHourKey} />
             </div>
           </div>
 
@@ -633,41 +621,41 @@ export default function Home() {
                 <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                   Charge Window <span className="text-nc-ok">(buy low)</span>
                 </div>
-                {priceData?.arbEdge?.chargeWindow ? (
+                {displayArb.chargeWindow ? (
                   <div className="font-mono text-sm text-nc-ink">
-                    <span className="text-nc-ok font-semibold">${priceData.arbEdge.chargeWindow.priceMwh.toFixed(2)}</span>
+                    <span className="text-nc-ok font-semibold">${displayArb.chargeWindow.priceMwh.toFixed(2)}</span>
                     <span className="text-nc-ink-dim text-[10px] ml-1">
-                      @{priceData.arbEdge.chargeWindow.hourEnding}:00
+                      @{displayArb.chargeWindow.hourEnding}:00
                     </span>
                   </div>
                 ) : (
-                  <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                  <div className="font-mono text-sm text-nc-ink-dim">Unavailable</div>
                 )}
               </div>
               <div>
                 <div className="text-[9px] text-nc-ink-mute uppercase tracking-wider mb-0.5">
                   Discharge Window <span className="text-nc-accent">(sell high)</span>
                 </div>
-                {priceData?.arbEdge?.dischargeWindow ? (
+                {displayArb.dischargeWindow ? (
                   <div className="font-mono text-sm text-nc-ink">
-                    <span className="text-nc-accent font-semibold">${priceData.arbEdge.dischargeWindow.priceMwh.toFixed(2)}</span>
+                    <span className="text-nc-accent font-semibold">${displayArb.dischargeWindow.priceMwh.toFixed(2)}</span>
                     <span className="text-nc-ink-dim text-[10px] ml-1">
-                      @{priceData.arbEdge.dischargeWindow.hourEnding}:00
+                      @{displayArb.dischargeWindow.hourEnding}:00
                     </span>
                   </div>
                 ) : (
-                  <div className="font-mono text-sm text-nc-ink-dim">—</div>
+                  <div className="font-mono text-sm text-nc-ink-dim">Unavailable</div>
                 )}
               </div>
             </div>
-            {priceData?.currentPriceMwh !== null && priceData?.arbEdge && !priceData.arbEdge.hasEdge && (
+            {displayArb.chargeWindow && !displayArb.hasEdge && (
               <div className="mt-2 text-[10px] font-mono text-nc-warn">
                 No arb edge — spread below $5/MWh threshold
               </div>
             )}
-            {priceData?.arbEdge?.hasEdge && (
+            {displayArb.hasEdge && (
               <div className="mt-2 text-[10px] font-mono text-nc-ok">
-                ${priceData.arbEdge.spreadMwh.toFixed(2)}/MWh spread available
+                ${displayArb.spreadMwh.toFixed(2)}/MWh spread available
               </div>
             )}
             {priceData?.currentPriceMwh === null && (
@@ -851,17 +839,44 @@ function Divider() {
   return <div className="h-px bg-nc-line my-1" />;
 }
 
-function ErcotMiniGrid({ ercotData, cachedData }: { ercotData: ErcotData | null; cachedData: ErcotCacheData | null }) {
-  if (cachedData?.gridSummary) {
-    const { gridSummary } = cachedData;
+function ErcotMiniGrid({
+  ercotData,
+  cachedData,
+  selectedHourKey,
+}: {
+  ercotData: ErcotData | null;
+  cachedData: ErcotCacheData | null;
+  selectedHourKey?: string | null;
+}) {
+  // Prefer selected-hour snapshot so Load/Wind/Solar/Net track the slider.
+  const hourSummary =
+    (selectedHourKey && cachedData?.hourlyData?.find(h => h.hourKey === selectedHourKey)?.gridSummary)
+    || cachedData?.gridSummary
+    || null;
+
+  if (hourSummary) {
+    const hasRenewables =
+      typeof hourSummary.totalWindMw === 'number' &&
+      typeof hourSummary.totalSolarMw === 'number';
+    const netLoadMw = hasRenewables
+      ? hourSummary.totalLoadMw - hourSummary.totalWindMw - hourSummary.totalSolarMw
+      : null;
     return (
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11px] text-nc-ink-dim">
-        <div>P1 load <strong className="text-nc-ink font-medium">{(gridSummary.totalLoadMw / 1000).toFixed(2)} GW</strong></div>
-        <div>freq <strong className="text-nc-ink font-medium">{gridSummary.frequencyHz.toFixed(2)} Hz</strong></div>
-        <div>North <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.35 / 10)} kW</strong></div>
-        <div>South <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.28 / 10)} kW</strong></div>
-        <div>West <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.19 / 10)} kW</strong></div>
-        <div>Houston <strong className="text-nc-ink font-medium">{Math.round(gridSummary.totalLoadMw * 0.18 / 10)} kW</strong></div>
+        <div>Load <strong className="text-nc-ink font-medium">{(hourSummary.totalLoadMw / 1000).toFixed(2)} GW</strong></div>
+        <div>freq <strong className="text-nc-ink font-medium">{hourSummary.frequencyHz.toFixed(2)} Hz</strong></div>
+        {hasRenewables ? (
+          <>
+            <div>Wind <strong className="text-nc-ink font-medium">{(hourSummary.totalWindMw / 1000).toFixed(2)} GW</strong></div>
+            <div>Solar <strong className="text-nc-ink font-medium">{(hourSummary.totalSolarMw / 1000).toFixed(2)} GW</strong></div>
+            <div>Net-load <strong className="text-nc-ink font-medium">{(netLoadMw! / 1000).toFixed(2)} GW</strong></div>
+          </>
+        ) : (
+          <>
+            <div>Wind <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
+            <div>Solar <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
+          </>
+        )}
       </div>
     );
   }
@@ -870,24 +885,20 @@ function ErcotMiniGrid({ ercotData, cachedData }: { ercotData: ErcotData | null;
     const { gridStatus } = ercotData;
     return (
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11px] text-nc-ink-dim">
-        <div>P1 load <strong className="text-nc-ink font-medium">{(gridStatus.totalLoadMw / 1000).toFixed(2)} GW</strong></div>
+        <div>Load <strong className="text-nc-ink font-medium">{(gridStatus.totalLoadMw / 1000).toFixed(2)} GW</strong></div>
         <div>freq <strong className="text-nc-ink font-medium">59.97 Hz</strong></div>
-        <div>North <strong className="text-nc-ink font-medium">118 kW</strong></div>
-        <div>South <strong className="text-nc-ink font-medium">94 kW</strong></div>
-        <div>West <strong className="text-nc-ink font-medium">62 kW</strong></div>
-        <div>Houston <strong className="text-nc-ink font-medium">38 kW</strong></div>
+        <div>Wind <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
+        <div>Solar <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
       </div>
     );
   }
 
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono text-[11px] text-nc-ink-dim">
-      <div>P1 load <strong className="text-nc-ink font-medium">1.42 GW</strong></div>
-      <div>freq <strong className="text-nc-ink font-medium">59.97 Hz</strong></div>
-      <div>North <strong className="text-nc-ink font-medium">118 kW</strong></div>
-      <div>South <strong className="text-nc-ink font-medium">94 kW</strong></div>
-      <div>West <strong className="text-nc-ink font-medium">62 kW</strong></div>
-      <div>Houston <strong className="text-nc-ink font-medium">38 kW</strong></div>
+      <div>Load <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
+      <div>Wind <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
+      <div>Solar <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
+      <div>Net-load <strong className="text-nc-ink-dim font-medium">Unavailable</strong></div>
     </div>
   );
 }
