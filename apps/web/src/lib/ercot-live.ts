@@ -286,8 +286,10 @@ const DURABLE_CACHE_TTL_SEC = 900;
 /** 
  * Cache key version - bump when hourlyData shape changes to bust stale cache.
  * v2: Fixed PascalCase→camelCase field mapping, 72h forecast, proper currentHourKey.
+ * v3: Added canonical alias map for field names (any casing → correct camelCase),
+ *     plus empty-hourlyData guard to prevent caching broken data.
  */
-const CACHE_KEY_VERSION = 'v2';
+const CACHE_KEY_VERSION = 'v3';
 
 /** Cache key for grid data */
 const GRID_CACHE_KEY = `ercot-last-good-grid:${CACHE_KEY_VERSION}`;
@@ -317,6 +319,11 @@ function getRuntimeCache() {
  * Call ONLY on successful live fetch.
  */
 async function saveLastGoodGrid(data: ErcotCacheData): Promise<void> {
+  if (!data.hourlyData || data.hourlyData.length === 0) {
+    console.warn('Refusing to save empty hourlyData to last-good cache');
+    return;
+  }
+  
   const cachedData: ErcotCacheData = {
     ...data,
     dataSource: 'cached',
@@ -520,21 +527,69 @@ interface ErcotApiResponse<T> {
 }
 
 /**
- * Convert PascalCase or snake_case field names to camelCase.
- * ERCOT API returns field names like "DeliveryDate", "HourEnding", "SystemTotal".
- * Our TypeScript interfaces expect "deliveryDate", "hourEnding", "systemTotal".
+ * Canonical field name aliases for ERCOT API fields.
+ * Maps lowercase-normalized keys to the camelCase names our interfaces expect.
+ * This ensures any casing variant (DeliveryDate, DELIVERYDATE, delivery_date, deliverydate)
+ * gets mapped to the correct interface field name.
+ */
+const CANONICAL_FIELD_ALIASES: Record<string, string> = {
+  deliverydate: 'deliveryDate',
+  hourending: 'hourEnding',
+  systemtotal: 'systemTotal',
+  coast: 'coast',
+  east: 'east',
+  farwest: 'farWest',
+  north: 'north',
+  northcentral: 'northCentral',
+  southcentral: 'southCentral',
+  southern: 'southern',
+  west: 'west',
+  actual: 'actual',
+  stppf: 'stppf',
+  wgrpp: 'wgrpp',
+  cophsl: 'copHsl',
+  hsl: 'hsl',
+  georegion: 'geoRegion',
+  model: 'model',
+  settlementpoint: 'settlementPoint',
+  settlementpointprice: 'settlementPointPrice',
+  settlementpointtype: 'settlementPointType',
+  deliveryhour: 'deliveryHour',
+  deliveryinterval: 'deliveryInterval',
+  repeathourflag: 'repeatHourFlag',
+};
+
+/**
+ * Normalize a field name to lowercase with underscores/separators removed.
+ * Used as lookup key for CANONICAL_FIELD_ALIASES.
+ */
+function normalizeFieldKey(fieldName: string): string {
+  return fieldName.toLowerCase().replace(/_/g, '');
+}
+
+/**
+ * Convert various field name formats to canonical camelCase.
+ * ERCOT API may return field names in PascalCase, ALL_CAPS, snake_case, or other formats.
+ * Our TypeScript interfaces expect specific camelCase names.
  * 
- * Examples:
- *   DeliveryDate → deliveryDate
- *   HourEnding → hourEnding  
- *   SystemTotal → systemTotal
- *   delivery_date → deliveryDate
- *   alreadyCamel → alreadyCamel (unchanged)
+ * Strategy:
+ * 1. Normalize input to lowercase (remove underscores for lookup)
+ * 2. Look up in canonical alias map → if found, use canonical name
+ * 3. Otherwise, apply standard PascalCase/snake_case conversion
+ * 
+ * This ensures: DeliveryDate, DELIVERYDATE, delivery_date, deliverydate → deliveryDate
  */
 function toCamelCase(fieldName: string): string {
+  const normalized = normalizeFieldKey(fieldName);
+  
+  if (CANONICAL_FIELD_ALIASES[normalized]) {
+    return CANONICAL_FIELD_ALIASES[normalized];
+  }
+  
   if (fieldName.includes('_')) {
     return fieldName.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
   }
+  
   return fieldName.charAt(0).toLowerCase() + fieldName.slice(1);
 }
 

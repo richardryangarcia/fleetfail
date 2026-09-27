@@ -307,3 +307,421 @@ describe('ERCOT API Response Transformation', () => {
     expect(result[0]).toEqual({ a: 'value1', b: 'value2' });
   });
 });
+
+describe('toCamelCase with Canonical Alias Map (v3 fix)', () => {
+  const CANONICAL_FIELD_ALIASES: Record<string, string> = {
+    deliverydate: 'deliveryDate',
+    hourending: 'hourEnding',
+    systemtotal: 'systemTotal',
+    coast: 'coast',
+    east: 'east',
+    farwest: 'farWest',
+    north: 'north',
+    northcentral: 'northCentral',
+    southcentral: 'southCentral',
+    southern: 'southern',
+    west: 'west',
+  };
+
+  function normalizeFieldKey(fieldName: string): string {
+    return fieldName.toLowerCase().replace(/_/g, '');
+  }
+
+  function toCamelCase(fieldName: string): string {
+    const normalized = normalizeFieldKey(fieldName);
+    
+    if (CANONICAL_FIELD_ALIASES[normalized]) {
+      return CANONICAL_FIELD_ALIASES[normalized];
+    }
+    
+    if (fieldName.includes('_')) {
+      return fieldName.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    }
+    
+    return fieldName.charAt(0).toLowerCase() + fieldName.slice(1);
+  }
+
+  describe('PascalCase inputs → canonical camelCase', () => {
+    it('converts DeliveryDate to deliveryDate', () => {
+      expect(toCamelCase('DeliveryDate')).toBe('deliveryDate');
+    });
+
+    it('converts HourEnding to hourEnding', () => {
+      expect(toCamelCase('HourEnding')).toBe('hourEnding');
+    });
+
+    it('converts SystemTotal to systemTotal', () => {
+      expect(toCamelCase('SystemTotal')).toBe('systemTotal');
+    });
+
+    it('converts single-word PascalCase (Coast, East)', () => {
+      expect(toCamelCase('Coast')).toBe('coast');
+      expect(toCamelCase('East')).toBe('east');
+    });
+
+    it('converts multi-word PascalCase zone names', () => {
+      expect(toCamelCase('FarWest')).toBe('farWest');
+      expect(toCamelCase('NorthCentral')).toBe('northCentral');
+      expect(toCamelCase('SouthCentral')).toBe('southCentral');
+    });
+  });
+
+  describe('ALL_CAPS with underscores → canonical camelCase', () => {
+    it('converts DELIVERY_DATE to deliveryDate', () => {
+      expect(toCamelCase('DELIVERY_DATE')).toBe('deliveryDate');
+    });
+
+    it('converts HOUR_ENDING to hourEnding', () => {
+      expect(toCamelCase('HOUR_ENDING')).toBe('hourEnding');
+    });
+
+    it('converts FAR_WEST to farWest', () => {
+      expect(toCamelCase('FAR_WEST')).toBe('farWest');
+    });
+
+    it('converts NORTH_CENTRAL to northCentral', () => {
+      expect(toCamelCase('NORTH_CENTRAL')).toBe('northCentral');
+    });
+  });
+
+  describe('ALL_CAPS without underscores → canonical camelCase (via alias map)', () => {
+    it('converts DELIVERYDATE to deliveryDate', () => {
+      expect(toCamelCase('DELIVERYDATE')).toBe('deliveryDate');
+    });
+
+    it('converts HOURENDING to hourEnding', () => {
+      expect(toCamelCase('HOURENDING')).toBe('hourEnding');
+    });
+
+    it('converts COAST to coast', () => {
+      expect(toCamelCase('COAST')).toBe('coast');
+    });
+
+    it('converts FARWEST to farWest', () => {
+      expect(toCamelCase('FARWEST')).toBe('farWest');
+    });
+
+    it('converts SYSTEMTOTAL to systemTotal', () => {
+      expect(toCamelCase('SYSTEMTOTAL')).toBe('systemTotal');
+    });
+  });
+
+  describe('lowercase snake_case → canonical camelCase', () => {
+    it('converts delivery_date to deliveryDate', () => {
+      expect(toCamelCase('delivery_date')).toBe('deliveryDate');
+    });
+
+    it('converts hour_ending to hourEnding', () => {
+      expect(toCamelCase('hour_ending')).toBe('hourEnding');
+    });
+
+    it('converts far_west to farWest', () => {
+      expect(toCamelCase('far_west')).toBe('farWest');
+    });
+  });
+
+  describe('already camelCase → unchanged', () => {
+    it('keeps deliveryDate unchanged', () => {
+      expect(toCamelCase('deliveryDate')).toBe('deliveryDate');
+    });
+
+    it('keeps hourEnding unchanged', () => {
+      expect(toCamelCase('hourEnding')).toBe('hourEnding');
+    });
+
+    it('keeps farWest unchanged', () => {
+      expect(toCamelCase('farWest')).toBe('farWest');
+    });
+  });
+
+  describe('all-lowercase → canonical camelCase (via alias map)', () => {
+    it('converts deliverydate to deliveryDate', () => {
+      expect(toCamelCase('deliverydate')).toBe('deliveryDate');
+    });
+
+    it('converts hourending to hourEnding', () => {
+      expect(toCamelCase('hourending')).toBe('hourEnding');
+    });
+
+    it('converts farwest to farWest', () => {
+      expect(toCamelCase('farwest')).toBe('farWest');
+    });
+  });
+});
+
+describe('ERCOT Payload Transform → hourlyData Integration (Prod Regression)', () => {
+  const CANONICAL_FIELD_ALIASES: Record<string, string> = {
+    deliverydate: 'deliveryDate',
+    hourending: 'hourEnding',
+    systemtotal: 'systemTotal',
+    coast: 'coast',
+    east: 'east',
+    farwest: 'farWest',
+    north: 'north',
+    northcentral: 'northCentral',
+    southcentral: 'southCentral',
+    southern: 'southern',
+    west: 'west',
+  };
+
+  function normalizeFieldKey(fieldName: string): string {
+    return fieldName.toLowerCase().replace(/_/g, '');
+  }
+
+  function toCamelCase(fieldName: string): string {
+    const normalized = normalizeFieldKey(fieldName);
+    if (CANONICAL_FIELD_ALIASES[normalized]) {
+      return CANONICAL_FIELD_ALIASES[normalized];
+    }
+    if (fieldName.includes('_')) {
+      return fieldName.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    }
+    return fieldName.charAt(0).toLowerCase() + fieldName.slice(1);
+  }
+
+  function transformWithCamelCase<T>(response: ErcotApiResponse<T>): T[] {
+    const { fields, data } = response;
+    
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      return [];
+    }
+    
+    const firstRow = data[0];
+    
+    if (fields && Array.isArray(fields) && fields.length > 0 && Array.isArray(firstRow)) {
+      const fieldNames = fields.map(f => toCamelCase(f.name));
+      return (data as unknown[][]).map(row => {
+        const obj: Record<string, unknown> = {};
+        fieldNames.forEach((name, idx) => {
+          if (idx < row.length) {
+            obj[name] = row[idx];
+          }
+        });
+        return obj as T;
+      });
+    }
+    
+    if (typeof firstRow === 'object' && firstRow !== null && !Array.isArray(firstRow)) {
+      const normalized = (data as Record<string, unknown>[]).map(item => {
+        const obj: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(item)) {
+          obj[toCamelCase(key)] = value;
+        }
+        return obj as T;
+      });
+      return normalized;
+    }
+    
+    return [];
+  }
+
+  interface ActualLoadByZone {
+    deliveryDate?: string;
+    hourEnding?: string;
+    coast?: number;
+    east?: number;
+    farWest?: number;
+    north?: number;
+    northCentral?: number;
+    southCentral?: number;
+    southern?: number;
+    west?: number;
+    systemTotal?: number;
+  }
+
+  interface HourlySnapshot {
+    hourKey: string;
+    deliveryDate: string;
+    hourEnding: number;
+    dataType: 'actual' | 'forecast';
+  }
+
+  function buildHourlyData(actualLoad: ActualLoadByZone[]): HourlySnapshot[] {
+    const hourlySnapshots: HourlySnapshot[] = [];
+    const processedHours = new Set<string>();
+
+    for (const load of actualLoad) {
+      if (!load.deliveryDate) continue;
+      const hourStr = load.hourEnding ?? '0';
+      const hourEndingNum = parseInt(String(hourStr).replace(':00', ''), 10) || 0;
+      const displayHour = hourEndingNum === 24 ? 0 : hourEndingNum;
+      const hourKey = `${load.deliveryDate} ${String(displayHour).padStart(2, '0')}:00`;
+      
+      if (processedHours.has(hourKey)) continue;
+      processedHours.add(hourKey);
+
+      hourlySnapshots.push({
+        hourKey,
+        deliveryDate: load.deliveryDate,
+        hourEnding: hourEndingNum,
+        dataType: 'actual',
+      });
+    }
+
+    return hourlySnapshots;
+  }
+
+  describe('PascalCase positional array format (likely ERCOT format)', () => {
+    const ercotResponse: ErcotApiResponse<ActualLoadByZone> = {
+      fields: [
+        { name: 'DeliveryDate' },
+        { name: 'HourEnding' },
+        { name: 'Coast' },
+        { name: 'East' },
+        { name: 'FarWest' },
+        { name: 'North' },
+        { name: 'NorthCentral' },
+        { name: 'SouthCentral' },
+        { name: 'Southern' },
+        { name: 'West' },
+        { name: 'SystemTotal' },
+      ],
+      data: [
+        ['2026-09-27', '1', 8500, 6200, 2100, 5800, 12500, 9200, 4800, 3200, 52300],
+        ['2026-09-27', '2', 8300, 6100, 2000, 5700, 12300, 9100, 4700, 3100, 51300],
+        ['2026-09-26', '24', 8700, 6400, 2200, 5900, 12700, 9400, 4900, 3300, 53500],
+      ] as unknown[][],
+    };
+
+    it('transforms to objects with correct camelCase field names', () => {
+      const result = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      expect(result).toHaveLength(3);
+      expect(result[0]?.deliveryDate).toBe('2026-09-27');
+      expect(result[0]?.hourEnding).toBe('1');
+      expect(result[0]?.farWest).toBe(2100);
+      expect(result[0]?.northCentral).toBe(12500);
+    });
+
+    it('produces non-empty hourlyData via buildHourlyData', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      const hourlyData = buildHourlyData(actualLoad);
+      
+      expect(hourlyData.length).toBeGreaterThan(0);
+      expect(hourlyData.length).toBe(3);
+    });
+
+    it('all hourlyData entries have valid deliveryDate', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      const hourlyData = buildHourlyData(actualLoad);
+      
+      const invalidEntries = hourlyData.filter(h => !h.deliveryDate);
+      expect(invalidEntries.length).toBe(0);
+    });
+  });
+
+  describe('ALL_CAPS positional array format (edge case)', () => {
+    const ercotResponse: ErcotApiResponse<ActualLoadByZone> = {
+      fields: [
+        { name: 'DELIVERYDATE' },
+        { name: 'HOURENDING' },
+        { name: 'COAST' },
+        { name: 'FARWEST' },
+        { name: 'NORTHCENTRAL' },
+      ],
+      data: [
+        ['2026-09-27', '1', 8500, 2100, 12500],
+        ['2026-09-27', '2', 8300, 2000, 12300],
+      ] as unknown[][],
+    };
+
+    it('transforms ALL_CAPS to correct camelCase field names', () => {
+      const result = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      expect(result).toHaveLength(2);
+      expect(result[0]?.deliveryDate).toBe('2026-09-27');
+      expect(result[0]?.hourEnding).toBe('1');
+      expect(result[0]?.farWest).toBe(2100);
+      expect(result[0]?.northCentral).toBe(12500);
+    });
+
+    it('produces non-empty hourlyData', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      const hourlyData = buildHourlyData(actualLoad);
+      
+      expect(hourlyData.length).toBeGreaterThan(0);
+      expect(hourlyData.length).toBe(2);
+    });
+  });
+
+  describe('lowercase snake_case positional array format (edge case)', () => {
+    const ercotResponse: ErcotApiResponse<ActualLoadByZone> = {
+      fields: [
+        { name: 'delivery_date' },
+        { name: 'hour_ending' },
+        { name: 'coast' },
+        { name: 'far_west' },
+        { name: 'north_central' },
+      ],
+      data: [
+        ['2026-09-27', '1', 8500, 2100, 12500],
+        ['2026-09-27', '2', 8300, 2000, 12300],
+      ] as unknown[][],
+    };
+
+    it('transforms snake_case to correct camelCase field names', () => {
+      const result = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      expect(result).toHaveLength(2);
+      expect(result[0]?.deliveryDate).toBe('2026-09-27');
+      expect(result[0]?.hourEnding).toBe('1');
+      expect(result[0]?.farWest).toBe(2100);
+      expect(result[0]?.northCentral).toBe(12500);
+    });
+
+    it('produces non-empty hourlyData', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      const hourlyData = buildHourlyData(actualLoad);
+      
+      expect(hourlyData.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('PascalCase legacy object format', () => {
+    const ercotResponse: ErcotApiResponse<ActualLoadByZone> = {
+      data: [
+        { DeliveryDate: '2026-09-27', HourEnding: '1', Coast: 8500, FarWest: 2100, NorthCentral: 12500 },
+        { DeliveryDate: '2026-09-27', HourEnding: '2', Coast: 8300, FarWest: 2000, NorthCentral: 12300 },
+      ] as unknown as ActualLoadByZone[],
+    };
+
+    it('transforms legacy object format correctly', () => {
+      const result = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      expect(result).toHaveLength(2);
+      expect(result[0]?.deliveryDate).toBe('2026-09-27');
+      expect(result[0]?.hourEnding).toBe('1');
+    });
+
+    it('produces non-empty hourlyData', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      const hourlyData = buildHourlyData(actualLoad);
+      
+      expect(hourlyData.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Regression: all-lowercase (deliverydate) must yield usable hourlyData', () => {
+    const ercotResponse: ErcotApiResponse<ActualLoadByZone> = {
+      fields: [
+        { name: 'deliverydate' },
+        { name: 'hourending' },
+        { name: 'coast' },
+      ],
+      data: [
+        ['2026-09-27', '1', 8500],
+        ['2026-09-27', '2', 8300],
+      ] as unknown[][],
+    };
+
+    it('transforms all-lowercase to correct camelCase', () => {
+      const result = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      expect(result[0]?.deliveryDate).toBe('2026-09-27');
+      expect(result[0]?.hourEnding).toBe('1');
+    });
+
+    it('produces non-empty hourlyData (NOT skipped due to undefined deliveryDate)', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(ercotResponse);
+      const hourlyData = buildHourlyData(actualLoad);
+      
+      expect(hourlyData.length).toBeGreaterThan(0);
+      expect(hourlyData.length).toBe(2);
+    });
+  });
+});
