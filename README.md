@@ -1,27 +1,23 @@
 # FleetFail ⚡ — Resilient Dispatch Simulator
 
 > **Base Power × AITX Hackathon** — Orchestration + Open Grid Data Tracks
-> 
+>
 > Deadline: Sunday 2026-09-27 10:00 AM America/Chicago
 
 ---
 
-## ⚠️ SYNTHETIC DISCLAIMER
+## Live Demo
 
-**This is NOT Base proprietary architecture.** All datasets, telemetry, and demo figures are **synthetic** unless a file explicitly states otherwise.
-
-- **Fleet devices**: ~20,000 synthetic battery devices with deterministically seeded positions for demonstration.
-- **Weather zones**: Load/renewables impact forecasts derived from ERCOT weather-zone geography — not raw NWS data.
-- **Settlement prices**: Wholesale SPP $/MWh from ERCOT Public API (when credentials configured) — not residential retail rates.
-- **Bill Stress**: Not implemented (P2 backlog).
+The deployed web app is at **[https://fleetfail.vercel.app/](https://fleetfail.vercel.app/)**.
 
 ---
 
 ## Overview
 
 FleetFail is a synthetic residential battery fleet orchestrator that proves aggregate dispatch recovers under partial failure **without**:
+
 - Duplicate kW effects
-- Stale command execution  
+- Stale command execution
 - Reserve violations
 
 **Claim:** At-least-once delivery with idempotent effect (NOT exactly-once).
@@ -48,15 +44,15 @@ open http://localhost:43210
 
 ### Available Scripts
 
-| Script | Description |
-|--------|-------------|
-| `pnpm install` | Install all dependencies |
-| `pnpm dev` | Start development server on port 43210 |
-| `pnpm build` | Build for production |
-| `pnpm test` | Run P0 kill-gate tests |
-| `pnpm test:watch` | Run tests in watch mode |
-| `pnpm typecheck` | TypeScript type checking |
-| `pnpm lint` | Run linting |
+| Script            | Description                            |
+| ----------------- | -------------------------------------- |
+| `pnpm install`    | Install all dependencies               |
+| `pnpm dev`        | Start development server on port 43210 |
+| `pnpm build`      | Build for production                   |
+| `pnpm test`       | Run P0 kill-gate tests                 |
+| `pnpm test:watch` | Run tests in watch mode                |
+| `pnpm typecheck`  | TypeScript type checking               |
+| `pnpm lint`       | Run linting                            |
 
 ---
 
@@ -64,10 +60,10 @@ open http://localhost:43210
 
 ### ERCOT API Credentials (Server-Only)
 
-| Variable | Description |
-|----------|-------------|
-| `ERCOT_API_USERNAME` | ERCOT B2C account email |
-| `ERCOT_API_PASSWORD` | ERCOT B2C account password |
+| Variable                            | Description                 |
+| ----------------------------------- | --------------------------- |
+| `ERCOT_API_USERNAME`                | ERCOT B2C account email     |
+| `ERCOT_API_PASSWORD`                | ERCOT B2C account password  |
 | `ERCOT_PUBLIC_API_SUBSCRIPTION_KEY` | Azure APIM subscription key |
 
 **Without credentials:** System uses fixture data (Sep 2024 snapshot) — fully functional demo.  
@@ -98,17 +94,17 @@ FleetFail follows strict honesty about data provenance. The UI always indicates 
 
 ### Grid Load Data
 
-| Condition | Badge |
-|-----------|-------|
-| Credentials present AND fetch succeeds | **LIVE** (green pulsing indicator) |
-| Missing credentials OR API fails | **"Cached / Replay — Live ERCOT unavailable"** (yellow) |
+| Condition                              | Badge                                                   |
+| -------------------------------------- | ------------------------------------------------------- |
+| Credentials present AND fetch succeeds | **LIVE** (green pulsing indicator)                      |
+| Missing credentials OR API fails       | **"Cached / Replay — Live ERCOT unavailable"** (yellow) |
 
 ### Settlement Point Prices (Arb Windows)
 
-| Condition | Badge |
-|-----------|-------|
-| Credentials present AND fetch succeeds | **LIVE** (green pulsing indicator) |
-| Missing credentials OR API fails | **"Unavailable"** — never invents SPP numbers |
+| Condition                              | Badge                                         |
+| -------------------------------------- | --------------------------------------------- |
+| Credentials present AND fetch succeeds | **LIVE** (green pulsing indicator)            |
+| Missing credentials OR API fails       | **"Unavailable"** — never invents SPP numbers |
 
 The system never silently shows fixture data as live.
 
@@ -119,16 +115,19 @@ The system never silently shows fixture data as live.
 Wholesale settlement point price signals for charge/discharge window recommendations.
 
 **Configuration:**
+
 - **Settlement Point:** `HB_HUBAVG` (ERCOT Hub Average)
 - **Horizon:** ~24 hours of Day-Ahead Market (DAM) prices
 - **Edge Threshold:** $5/MWh minimum spread required
 
 **Algorithm:**
+
 1. Over next 24 DAM hours, find argmin (charge window — buy low) and argmax (discharge window — sell high)
 2. Require (discharge − charge) ≥ **$5/MWh** edge threshold
 3. If spread < $5/MWh: display "no arb edge"
 
 **UI Display (on `/` and `/map`):**
+
 - **Now $/MWh** — current real-time settlement price
 - **Charge Window** — best time to buy (lowest price)
 - **Discharge Window** — best time to sell (highest price)
@@ -149,12 +148,14 @@ Wholesale settlement point price signals for charge/discharge window recommendat
 The `/map` page displays **~20,000 synthetic battery devices** across Texas (ERCOT) and Illinois (MISO) regions.
 
 **Fleet Distribution:**
+
 - **Texas (ERCOT):** 70% of devices across 8 weather zones
 - **Illinois (MISO):** 30% of devices across 4 load zones
 - **Gen1 Devices:** 25kW / 50kWh (60% of fleet)
 - **Gen3 Devices:** 40kW / 80kWh (40% of fleet)
 
 **Map Features:**
+
 - Leaflet.markercluster for efficient 20k device rendering
 - Cluster aggregation at zoom-out, individual markers at zoom-in
 - Viewport-based API serving (does not dump 20k per poll)
@@ -284,13 +285,13 @@ fleetfail/
 
 ### Units
 
-| Unit | Description |
-|------|-------------|
-| **kW** | Power (rate of energy delivery). Used for dispatch targets and setpoints. |
-| **kWh** | Energy (capacity). Used for battery storage capacity. |
-| **SOC** | State of Charge (0-100%). Current battery level. |
-| **Reserve** | Minimum SOC to maintain (default 20%). Prevents over-discharge. |
-| **Freshness** | Maximum age of telemetry before considered stale (default 30s). |
+| Unit          | Description                                                               |
+| ------------- | ------------------------------------------------------------------------- |
+| **kW**        | Power (rate of energy delivery). Used for dispatch targets and setpoints. |
+| **kWh**       | Energy (capacity). Used for battery storage capacity.                     |
+| **SOC**       | State of Charge (0-100%). Current battery level.                          |
+| **Reserve**   | Minimum SOC to maintain (default 20%). Prevents over-discharge.           |
+| **Freshness** | Maximum age of telemetry before considered stale (default 30s).           |
 
 ### Idempotency Mechanism
 
@@ -310,22 +311,22 @@ fleetfail/
 
 ### Event Types
 
-| Event | Description |
-|-------|-------------|
-| `COMMAND_SENT` | Command dispatched to device |
-| `COMMAND_ACKED` | Device acknowledged command |
-| `ACK_TIMEOUT` | No ACK received within timeout |
-| `RETRY_SAME_ID` | Retrying with same idempotency key |
-| `DUPLICATE_IGNORED` | Duplicate delivery detected and ignored |
-| `STALE_REJECTED` | Command from old epoch rejected |
-| `DEVICE_EXCLUDED` | Device excluded from allocation |
-| `REALLOCATED` | Power reallocated to different device |
-| `DEVICE_OFFLINE` | Device went offline |
-| `DEVICE_RECONNECTED` | Device reconnected with new epoch |
-| `DISPATCH_STARTED` | Dispatch initiated |
-| `DISPATCH_CONVERGED` | Dispatch met target |
-| `DISPATCH_PARTIAL` | Dispatch partially completed |
-| `DISPATCH_INSUFFICIENT` | Target exceeds available capacity |
+| Event                   | Description                             |
+| ----------------------- | --------------------------------------- |
+| `COMMAND_SENT`          | Command dispatched to device            |
+| `COMMAND_ACKED`         | Device acknowledged command             |
+| `ACK_TIMEOUT`           | No ACK received within timeout          |
+| `RETRY_SAME_ID`         | Retrying with same idempotency key      |
+| `DUPLICATE_IGNORED`     | Duplicate delivery detected and ignored |
+| `STALE_REJECTED`        | Command from old epoch rejected         |
+| `DEVICE_EXCLUDED`       | Device excluded from allocation         |
+| `REALLOCATED`           | Power reallocated to different device   |
+| `DEVICE_OFFLINE`        | Device went offline                     |
+| `DEVICE_RECONNECTED`    | Device reconnected with new epoch       |
+| `DISPATCH_STARTED`      | Dispatch initiated                      |
+| `DISPATCH_CONVERGED`    | Dispatch met target                     |
+| `DISPATCH_PARTIAL`      | Dispatch partially completed            |
+| `DISPATCH_INSUFFICIENT` | Target exceeds available capacity       |
 
 ---
 
@@ -343,9 +344,10 @@ All tests in `packages/engine/src/orchestrator.test.ts`:
 ✅ **INSUFFICIENT_CAPACITY on target > fleet capacity**  
 ✅ All event types emitted correctly  
 ✅ Metrics accurately tracked  
-✅ Deterministic with same seed  
+✅ Deterministic with same seed
 
 Run tests:
+
 ```bash
 pnpm test
 ```
@@ -380,22 +382,24 @@ pnpm test
 
 Deploy from Origin (not GitHub) to Vercel.
 
+**Live app:** [https://fleetfail.vercel.app/](https://fleetfail.vercel.app/)
+
 ### Project Configuration
 
-| Setting | Value |
-|---------|-------|
-| Root Directory | `apps/web` |
-| Framework Preset | Next.js |
-| Build Command | `cd ../.. && pnpm install && pnpm build` |
+| Setting          | Value                                    |
+| ---------------- | ---------------------------------------- |
+| Root Directory   | `apps/web`                               |
+| Framework Preset | Next.js                                  |
+| Build Command    | `cd ../.. && pnpm install && pnpm build` |
 
 ### Environment Variables (Server-Only)
 
 Add in Vercel Dashboard → Project Settings → Environment Variables:
 
-| Variable | Required |
-|----------|----------|
-| `ERCOT_API_USERNAME` | No (optional for LIVE) |
-| `ERCOT_API_PASSWORD` | No (optional for LIVE) |
+| Variable                            | Required               |
+| ----------------------------------- | ---------------------- |
+| `ERCOT_API_USERNAME`                | No (optional for LIVE) |
+| `ERCOT_API_PASSWORD`                | No (optional for LIVE) |
 | `ERCOT_PUBLIC_API_SUBSCRIPTION_KEY` | No (optional for LIVE) |
 
 See [docs/vercel.md](docs/vercel.md) for complete deployment guide.
@@ -423,17 +427,17 @@ Default config (`packages/engine/src/types.ts`):
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/state` | GET | Get current simulation state |
-| `/api/dispatch` | POST | Start a new dispatch `{targetKw}` |
-| `/api/fault` | POST | Inject fault `{deviceId, faultType}` |
-| `/api/fault?deviceId=X` | DELETE | Restore device |
-| `/api/reset` | POST | Reset fleet `{seed?, deviceCount?}` |
-| `/api/simulation` | POST | Control simulation `{action: 'start'|'stop'}` |
-| `/api/ercot` | GET | Get ERCOT zone data and allocations |
-| `/api/ercot-cache` | GET | Get cached ERCOT data with zone loads |
-| `/api/ercot-prices` | GET | Get settlement point prices + arb windows |
+| Endpoint                | Method | Description                               |
+| ----------------------- | ------ | ----------------------------------------- | -------- |
+| `/api/state`            | GET    | Get current simulation state              |
+| `/api/dispatch`         | POST   | Start a new dispatch `{targetKw}`         |
+| `/api/fault`            | POST   | Inject fault `{deviceId, faultType}`      |
+| `/api/fault?deviceId=X` | DELETE | Restore device                            |
+| `/api/reset`            | POST   | Reset fleet `{seed?, deviceCount?}`       |
+| `/api/simulation`       | POST   | Control simulation `{action: 'start'      | 'stop'}` |
+| `/api/ercot`            | GET    | Get ERCOT zone data and allocations       |
+| `/api/ercot-cache`      | GET    | Get cached ERCOT data with zone loads     |
+| `/api/ercot-prices`     | GET    | Get settlement point prices + arb windows |
 
 ---
 
