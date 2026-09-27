@@ -3,6 +3,7 @@ import { getCombinedFixtureWithHourlyData, type ErcotCacheData } from '@fleetfai
 import { fetchLiveErcotData, hasErcotCredentials } from '@/lib/ercot-live';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 let cachedLiveData: { data: ErcotCacheData; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000;
