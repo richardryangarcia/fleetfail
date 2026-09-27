@@ -327,11 +327,15 @@ export class Orchestrator {
     return { allocatedKw, commandIds, deviceCount: commandIds.length };
   }
 
-  sendPendingCommands(): void {
+  sendPendingCommands(): number {
     const dispatch = this.getActiveDispatch();
-    if (!dispatch) return;
+    if (!dispatch) return 0;
+    
+    let sentThisTick = 0;
     
     for (const commandId of dispatch.commandIds) {
+      if (sentThisTick >= this.config.maxSendsPerTick) break;
+      
       const command = this.state.commands.get(commandId);
       if (!command || command.status !== 'pending') continue;
       
@@ -347,6 +351,7 @@ export class Orchestrator {
       const sent = markSent(command, this.state.currentTime);
       this.state.commands.set(commandId, sent);
       this.metrics.commandsSent++;
+      sentThisTick++;
       
       this.emitEvent(events.commandSent(
         this.state.currentTime,
@@ -356,6 +361,8 @@ export class Orchestrator {
         command.setpointKw
       ));
     }
+    
+    return sentThisTick;
   }
 
   simulateDelivery(commandId: string): DeliveryResult {
@@ -544,9 +551,18 @@ export class Orchestrator {
       
       excludeDevices.add(command.deviceId);
       
+      const failedDevice = this.state.devices.get(command.deviceId);
+      const failedZone = failedDevice?.zone;
+      
       const available = this.getDevices()
         .filter(d => d.status === 'online' && !excludeDevices.has(d.id))
-        .sort((a, b) => getAvailablePowerKw(b) - getAvailablePowerKw(a));
+        .sort((a, b) => {
+          const aInZone = failedZone && a.zone === failedZone;
+          const bInZone = failedZone && b.zone === failedZone;
+          if (aInZone && !bInZone) return -1;
+          if (!aInZone && bInZone) return 1;
+          return getAvailablePowerKw(b) - getAvailablePowerKw(a);
+        });
       
       for (const device of available) {
         const capacity = getAvailablePowerKw(device);
@@ -640,14 +656,19 @@ export class Orchestrator {
     
     this.sendPendingCommands();
     
+    let acksThisTick = 0;
     for (const command of this.state.commands.values()) {
+      if (acksThisTick >= this.config.maxAcksPerTick) break;
+      
       if (command.status === 'sent' && command.lastAttemptAt !== null) {
         const timeSinceSent = this.state.currentTime - command.lastAttemptAt;
         if (timeSinceSent >= this.config.tickIntervalMs) {
           const device = this.state.devices.get(command.deviceId);
           if (device && device.status === 'online' && 
               !this.faultInjector.shouldLoseAck(device.id, this.state.currentTime)) {
-            this.simulateAck(command.id);
+            if (this.simulateAck(command.id)) {
+              acksThisTick++;
+            }
           }
         }
       }

@@ -293,7 +293,7 @@ export function MapSideStrip({
             className="w-full py-2 text-left px-3 border border-[#5a2828] text-[#e07070] bg-nc-elev hover:bg-[#151820] text-[12px] font-medium mb-2 transition-colors"
           >
             Mass Outage
-            <span className="block text-[10px] font-mono text-nc-ink-mute mt-0.5">take offline · n=10</span>
+            <span className="block text-[10px] font-mono text-nc-ink-mute mt-0.5">take offline · n=100</span>
           </button>
         )}
         {onRestoreAll && (

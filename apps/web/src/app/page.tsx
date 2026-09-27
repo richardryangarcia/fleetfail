@@ -109,7 +109,7 @@ export default function Home() {
   const handleMassOutage = async () => {
     if (!state) return;
     const onlineDevices = state.devices.filter(d => d.status === 'online');
-    const count = Math.min(10, onlineDevices.length);
+    const count = Math.min(100, onlineDevices.length);
     for (let i = 0; i < count; i++) {
       await handleInjectFault(onlineDevices[i]!.id, 'offline');
     }
@@ -244,7 +244,7 @@ export default function Home() {
           <Divider />
 
           <VerbBlock title="Fault Injection">
-            <Button variant="danger" onClick={handleMassOutage} hint="take offline · n=10">
+            <Button variant="danger" onClick={handleMassOutage} hint="take offline · n=100">
               Mass Outage
             </Button>
             <Button variant="ok" onClick={handleRestoreAll} hint="rejoin + reallocate">

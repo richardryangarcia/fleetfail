@@ -14,6 +14,8 @@ export function getOrchestrator(): Orchestrator {
       maxRetries: 3,
       commandExpiryMs: 30000,
       tickIntervalMs: 500,
+      maxSendsPerTick: 2,
+      maxAcksPerTick: 1,
     });
     orchestrator.seedFleet(DEFAULT_DEVICE_COUNT, Date.now());
   }
@@ -28,6 +30,8 @@ export function resetOrchestrator(seed?: number, deviceCount: number = DEFAULT_D
     maxRetries: 3,
     commandExpiryMs: 30000,
     tickIntervalMs: 500,
+    maxSendsPerTick: 2,
+    maxAcksPerTick: 1,
   });
   orchestrator.seedFleet(deviceCount, Date.now());
 }
