@@ -51,6 +51,16 @@ export function MapSideStrip({
   const progressPct = dispatch && dispatch.targetKw > 0
     ? (dispatch.deliveredKw / dispatch.targetKw) * 100
     : 0;
+  
+  const safeMetrics = {
+    deliveredKw: metrics?.deliveredKw ?? 0,
+    reallocations: metrics?.reallocations ?? 0,
+    devicesOnline: metrics?.devicesOnline ?? 0,
+    devicesOffline: metrics?.devicesOffline ?? 0,
+    duplicatesIgnored: metrics?.duplicatesIgnored ?? 0,
+    staleRejected: metrics?.staleRejected ?? 0,
+    pendingCommands: metrics?.pendingCommands ?? 0,
+  };
 
   return (
     <div className="w-80 bg-nc-panel border-l border-nc-line-strong flex flex-col h-full overflow-y-auto">
@@ -72,19 +82,19 @@ export function MapSideStrip({
       <div className="grid grid-cols-2 border-b border-nc-line-strong bg-nc-bg shrink-0">
         <div className="p-2 border-r border-nc-line">
           <div className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">Delivered</div>
-          <div className="text-lg font-mono font-semibold text-nc-accent tabular-nums">{metrics.deliveredKw.toFixed(0)}</div>
+          <div className="text-lg font-mono font-semibold text-nc-accent tabular-nums">{safeMetrics.deliveredKw.toFixed(0)}</div>
         </div>
         <div className="p-2">
           <div className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">Reallocations</div>
-          <div className="text-lg font-mono font-semibold text-nc-accent tabular-nums">{metrics.reallocations}</div>
+          <div className="text-lg font-mono font-semibold text-nc-accent tabular-nums">{safeMetrics.reallocations}</div>
         </div>
         <div className="p-2 border-r border-nc-line border-t border-nc-line">
           <div className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">Online</div>
-          <div className="text-lg font-mono font-semibold text-nc-ok tabular-nums">{metrics.devicesOnline}</div>
+          <div className="text-lg font-mono font-semibold text-nc-ok tabular-nums">{safeMetrics.devicesOnline}</div>
         </div>
         <div className="p-2 border-t border-nc-line">
           <div className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">Offline</div>
-          <div className="text-lg font-mono font-semibold text-nc-bad tabular-nums">{metrics.devicesOffline}</div>
+          <div className="text-lg font-mono font-semibold text-nc-bad tabular-nums">{safeMetrics.devicesOffline}</div>
         </div>
       </div>
 
@@ -254,10 +264,10 @@ export function MapSideStrip({
                 style={{ width: `${Math.min(100, progressPct)}%` }}
               />
             </div>
-            {metrics.reallocations > 0 && (
+            {safeMetrics.reallocations > 0 && (
               <div className="mt-2 flex items-center gap-2">
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#1a2518] text-nc-ok border border-[#2a4528]">
-                  ↑ {metrics.reallocations} covering slack
+                  ↑ {safeMetrics.reallocations} covering slack
                 </span>
               </div>
             )}
@@ -279,9 +289,9 @@ export function MapSideStrip({
       {/* Invariant Counters */}
       <div className="p-3 border-b border-nc-line">
         <div className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-bold mb-2">Invariants</div>
-        <MetricRow label="Dupes Ignored" value={metrics.duplicatesIgnored} variant="mute" />
-        <MetricRow label="Stale Rejected" value={metrics.staleRejected} variant="warn" />
-        <MetricRow label="Pending Cmds" value={metrics.pendingCommands} variant="mute" />
+        <MetricRow label="Dupes Ignored" value={safeMetrics.duplicatesIgnored} variant="mute" />
+        <MetricRow label="Stale Rejected" value={safeMetrics.staleRejected} variant="warn" />
+        <MetricRow label="Pending Cmds" value={safeMetrics.pendingCommands} variant="mute" />
       </div>
 
       {/* Fault Injection */}

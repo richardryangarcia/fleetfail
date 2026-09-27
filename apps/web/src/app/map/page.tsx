@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
 import { MapSideStrip } from '@/components/MapSideStrip';
@@ -31,10 +31,14 @@ export default function MapPage() {
   const [ercotData, setErcotData] = useState<ErcotCacheData | null>(null);
   const [priceData, setPriceData] = useState<PriceCacheData | null>(null);
   const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
+  
+  const selectedHourKeyRef = useRef<string | null>(null);
+  selectedHourKeyRef.current = selectedHourKey;
 
   const fetchState = useCallback(async () => {
     try {
-      const hourParam = selectedHourKey ? `?hourKey=${encodeURIComponent(selectedHourKey)}` : '';
+      const currentHourKey = selectedHourKeyRef.current;
+      const hourParam = currentHourKey ? `?hourKey=${encodeURIComponent(currentHourKey)}` : '';
       const [stateRes, ercotRes, priceRes] = await Promise.all([
         fetch('/api/state'),
         fetch(`/api/ercot-cache${hourParam}`),
@@ -49,13 +53,13 @@ export default function MapPage() {
       setErcotData(ercotDataRes);
       setPriceData(priceDataRes);
       
-      if (!selectedHourKey && ercotDataRes.currentHourKey) {
+      if (!selectedHourKeyRef.current && ercotDataRes.currentHourKey) {
         setSelectedHourKey(ercotDataRes.currentHourKey);
       }
     } catch (error) {
       console.error('Failed to fetch state:', error);
     }
-  }, [selectedHourKey]);
+  }, []);
 
   useEffect(() => {
     fetchState();
@@ -121,6 +125,14 @@ export default function MapPage() {
     );
   }
 
+  const { 
+    devices = [], 
+    events = [], 
+    metrics = {} as FleetMetrics, 
+    activeDispatch, 
+    isRunning 
+  } = state;
+
   return (
     <div className="h-screen flex flex-col bg-nc-bg">
       <main className="flex-1 flex overflow-hidden">
@@ -137,20 +149,20 @@ export default function MapPage() {
             </div>
           )}
           <TexasMap
-            devices={state.devices}
-            events={state.events}
+            devices={devices}
+            events={events}
             ercotData={ercotData}
-            dispatch={state.activeDispatch}
+            dispatch={activeDispatch}
             onDeviceClick={handleDeviceClick}
             onZoneClick={handleMassOutage}
           />
         </div>
         <MapSideStrip
-          metrics={state.metrics}
-          dispatch={state.activeDispatch}
+          metrics={metrics}
+          dispatch={activeDispatch}
           ercotData={ercotData}
           priceData={priceData}
-          isRunning={state.isRunning}
+          isRunning={isRunning}
           onStartDispatch={handleStartDispatch}
           onMassOutage={handleMassOutage}
           onRestoreAll={handleRestoreAll}
