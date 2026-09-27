@@ -55,7 +55,7 @@ export default function Home() {
   const [autoFireFired, setAutoFireFired] = useState(false);
   
   // Ref to hold the dispatch handler for use in effects (avoids stale closure)
-  const startDispatchRef = useRef<() => Promise<void>>();
+  const startDispatchRef = useRef<(overrideTargetKw?: number) => Promise<void>>();
 
   const fetchState = useCallback(async () => {
     try {
@@ -193,8 +193,8 @@ export default function Home() {
       const windowHour = dischargeWindow.hourEnding;
       if (autoFiredWindowsRef.current.has(windowHour)) return;
       
-      // 4. Dispatch already active (executing or converging)
-      if (activeDispatch?.status === 'executing') return;
+      // 4. Dispatch already active (allocating or executing)
+      if (activeDispatch?.status === 'allocating' || activeDispatch?.status === 'executing') return;
       
       // Check if wall clock hour matches discharge window
       // ERCOT hour-ending: hourEnding 17 = 16:00-17:00, so we fire when current hour >= hourEnding - 1
@@ -210,7 +210,7 @@ export default function Home() {
         // Fire auto-dispatch
         autoFiredWindowsRef.current.add(windowHour);
         setAutoFireFired(true);
-        startDispatchRef.current?.();
+        startDispatchRef.current?.(AUTO_DISPATCH_TARGET_KW);
       }
     };
     
@@ -248,28 +248,13 @@ export default function Home() {
     setSelectedHourKey(hourKey);
   }, []);
 
-  const handleDispatch = async () => {
+  const handleDispatch = async (overrideTargetKw?: number) => {
     setLoading(true);
     try {
       await fetch('/api/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetKw, selectedHourKey }),
-      });
-      await fetchState();
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  // Auto-dispatch handler for the auto-fire effect (uses fixed target)
-  const handleAutoDispatch = async () => {
-    setLoading(true);
-    try {
-      await fetch('/api/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetKw: AUTO_DISPATCH_TARGET_KW, selectedHourKey }),
+        body: JSON.stringify({ targetKw: overrideTargetKw ?? targetKw, selectedHourKey }),
       });
       await fetchState();
     } finally {
@@ -278,7 +263,7 @@ export default function Home() {
   };
   
   // Keep the ref updated so the auto-fire effect can use it
-  startDispatchRef.current = handleAutoDispatch;
+  startDispatchRef.current = handleDispatch;
 
   const handleInjectFault = async (deviceId: string, faultType: string) => {
     await fetch('/api/fault', {
@@ -478,7 +463,7 @@ export default function Home() {
             </Field>
             <Button
               variant="primary"
-              onClick={handleDispatch}
+              onClick={() => handleDispatch()}
               disabled={loading || activeDispatch?.status === 'executing'}
               hint={activeDispatch?.id ? `id=${activeDispatch.id.slice(0, 12)}` : undefined}
             >

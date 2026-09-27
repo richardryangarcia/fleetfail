@@ -164,8 +164,8 @@ export default function MapPage() {
       const windowHour = dischargeWindow.hourEnding;
       if (autoFiredWindowsRef.current.has(windowHour)) return;
       
-      // 4. Dispatch already active (executing or converging)
-      if (activeDispatch?.status === 'executing') return;
+      // 4. Dispatch already active (allocating or executing)
+      if (activeDispatch?.status === 'allocating' || activeDispatch?.status === 'executing') return;
       
       // Check if wall clock hour matches discharge window
       // ERCOT hour-ending: hourEnding 17 = 16:00-17:00, so we fire when current hour >= hourEnding - 1
