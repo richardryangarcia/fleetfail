@@ -10,6 +10,8 @@ interface HourSliderProps {
   onHourChange: (hourKey: string) => void;
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function formatHourLabel(hourKey: string): string {
   const [, time] = hourKey.split(' ');
   const hour = parseInt(time?.split(':')[0] || '0', 10);
@@ -23,6 +25,37 @@ function formatDateLabel(hourKey: string): string {
   const [date] = hourKey.split(' ');
   const [, month, day] = (date || '').split('-');
   return `${parseInt(month || '1', 10)}/${parseInt(day || '1', 10)}`;
+}
+
+function formatFullDateTime(hourKey: string): { iso: string; human: string } {
+  const [date, time] = hourKey.split(' ');
+  const [year, month, day] = (date || '').split('-');
+  const hour = parseInt(time?.split(':')[0] || '0', 10);
+  
+  const monthIdx = parseInt(month || '1', 10) - 1;
+  const monthName = MONTH_NAMES[monthIdx] || 'Jan';
+  const dayNum = parseInt(day || '1', 10);
+  
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  
+  const iso = `${year}-${month}-${day} ${String(hour).padStart(2, '0')}:00`;
+  const human = `${monthName} ${dayNum} · ${hour12}:00 ${ampm}`;
+  
+  return { iso, human };
+}
+
+function formatEndpointLabel(hourKey: string): string {
+  const [date, time] = hourKey.split(' ');
+  const [, month, day] = (date || '').split('-');
+  const hour = parseInt(time?.split(':')[0] || '0', 10);
+  
+  const monthNum = parseInt(month || '1', 10);
+  const dayNum = parseInt(day || '1', 10);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  
+  return `${monthNum}/${dayNum} ${hour12}${ampm.toLowerCase()}`;
 }
 
 export function HourSlider({ hourlyData, currentHourKey, selectedHourKey, onHourChange }: HourSliderProps) {
@@ -40,6 +73,7 @@ export function HourSlider({ hourlyData, currentHourKey, selectedHourKey, onHour
   
   const selectedSnapshot = sortedHours[selectedIndex];
   const isActual = selectedSnapshot?.dataType === 'actual';
+  const selectedDateTime = formatFullDateTime(selectedHourKey);
   
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const index = parseInt(e.target.value, 10);
@@ -80,10 +114,6 @@ export function HourSlider({ hourlyData, currentHourKey, selectedHourKey, onHour
     return null;
   }
   
-  const firstDate = formatDateLabel(sortedHours[0]?.hourKey || '');
-  const lastDate = formatDateLabel(sortedHours[sortedHours.length - 1]?.hourKey || '');
-  const showDateRange = firstDate !== lastDate;
-  
   return (
     <div className="bg-[#0c0e12] border border-nc-line-strong px-3 py-2">
       <div className="flex items-center justify-between mb-2">
@@ -100,9 +130,14 @@ export function HourSlider({ hourlyData, currentHourKey, selectedHourKey, onHour
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-nc-num">
-            {formatHourLabel(selectedHourKey)}
-          </span>
+          <div className="text-right">
+            <div className="font-mono text-xs text-nc-num">
+              {selectedDateTime.human}
+            </div>
+            <div className="font-mono text-[10px] text-nc-ink-dim">
+              {selectedDateTime.iso}
+            </div>
+          </div>
           {selectedIndex !== currentIndex && currentIndex >= 0 && (
             <button
               onClick={handleGoToNow}
@@ -169,8 +204,8 @@ export function HourSlider({ hourlyData, currentHourKey, selectedHourKey, onHour
       </div>
       
       <div className="flex justify-between mt-1 text-[9px] font-mono text-nc-ink-mute">
-        <span>{showDateRange ? `${firstDate} ` : ''}{formatHourLabel(sortedHours[0]?.hourKey || '')}</span>
-        <span>{showDateRange ? `${lastDate} ` : ''}{formatHourLabel(sortedHours[sortedHours.length - 1]?.hourKey || '')}</span>
+        <span>{formatEndpointLabel(sortedHours[0]?.hourKey || '')}</span>
+        <span>{formatEndpointLabel(sortedHours[sortedHours.length - 1]?.hourKey || '')}</span>
       </div>
     </div>
   );

@@ -441,15 +441,22 @@ export class FleetDb {
   }
 
   /**
+   * Cache key version - bump this when hourlyData shape changes to bust stale cache.
+   * v2: Fixed PascalCase→camelCase field mapping, 72h forecast, proper currentHourKey selection.
+   */
+  private static readonly CACHE_KEY_VERSION = 'v2';
+
+  /**
    * Save last-good ERCOT grid data snapshot.
    * Called on successful live fetch to preserve for fallback.
    */
   saveLastGoodGrid(data: ErcotCacheData): void {
+    const cacheKey = `grid:${FleetDb.CACHE_KEY_VERSION}`;
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO ercot_last_good (cache_key, type, data, captured_at)
-      VALUES ('grid', 'grid', ?, ?)
+      VALUES (?, 'grid', ?, ?)
     `);
-    stmt.run(JSON.stringify(data), Date.now());
+    stmt.run(cacheKey, JSON.stringify(data), Date.now());
   }
 
   /**
@@ -457,9 +464,10 @@ export class FleetDb {
    * Returns null if no snapshot exists.
    */
   loadLastGoodGrid(): ErcotCacheData | null {
+    const cacheKey = `grid:${FleetDb.CACHE_KEY_VERSION}`;
     const row = this.db.prepare(`
-      SELECT data, captured_at FROM ercot_last_good WHERE cache_key = 'grid'
-    `).get() as { data: string; captured_at: number } | undefined;
+      SELECT data, captured_at FROM ercot_last_good WHERE cache_key = ?
+    `).get(cacheKey) as { data: string; captured_at: number } | undefined;
     
     if (!row) return null;
     
@@ -477,7 +485,7 @@ export class FleetDb {
    * Each settlement point is stored separately.
    */
   saveLastGoodPrices(data: PriceCacheData): void {
-    const cacheKey = `prices:${data.settlementPoint}`;
+    const cacheKey = `prices:${FleetDb.CACHE_KEY_VERSION}:${data.settlementPoint}`;
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO ercot_last_good (cache_key, type, data, captured_at)
       VALUES (?, 'prices', ?, ?)
@@ -490,7 +498,7 @@ export class FleetDb {
    * Returns null if no snapshot exists for the given settlement point.
    */
   loadLastGoodPrices(settlementPoint: string): PriceCacheData | null {
-    const cacheKey = `prices:${settlementPoint}`;
+    const cacheKey = `prices:${FleetDb.CACHE_KEY_VERSION}:${settlementPoint}`;
     const row = this.db.prepare(`
       SELECT data, captured_at FROM ercot_last_good WHERE cache_key = ?
     `).get(cacheKey) as { data: string; captured_at: number } | undefined;
@@ -508,9 +516,10 @@ export class FleetDb {
    * Check if we have a last-good snapshot available.
    */
   hasLastGoodGrid(): boolean {
+    const cacheKey = `grid:${FleetDb.CACHE_KEY_VERSION}`;
     const row = this.db.prepare(`
-      SELECT 1 FROM ercot_last_good WHERE cache_key = 'grid'
-    `).get();
+      SELECT 1 FROM ercot_last_good WHERE cache_key = ?
+    `).get(cacheKey);
     return !!row;
   }
 
@@ -518,7 +527,7 @@ export class FleetDb {
    * Check if we have last-good price data for a settlement point.
    */
   hasLastGoodPrices(settlementPoint: string): boolean {
-    const cacheKey = `prices:${settlementPoint}`;
+    const cacheKey = `prices:${FleetDb.CACHE_KEY_VERSION}:${settlementPoint}`;
     const row = this.db.prepare(`
       SELECT 1 FROM ercot_last_good WHERE cache_key = ?
     `).get(cacheKey);
