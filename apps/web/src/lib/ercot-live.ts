@@ -433,7 +433,7 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
   
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
-      size: 24,
+      size: 96,
     },
   });
   
@@ -461,7 +461,7 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
   
   const response = await client.get<ErcotApiResponse<WindActualForecast>>('/np4-742-cd/wpp_hrly_actual_fcast_geo', {
     params: {
-      size: 100,
+      size: 300,
     },
   });
   
@@ -482,7 +482,7 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
     try {
       const response = await client.get<ErcotApiResponse<SolarActualForecast>>(path, {
         params: {
-          size: 100,
+          size: 300,
         },
       });
       
