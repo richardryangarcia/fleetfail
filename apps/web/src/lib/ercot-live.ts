@@ -283,11 +283,17 @@ function createCacheEntry<T>(data: T, ttlMs: number): CacheEntry<T> {
 /** TTL for durable cache entries (~15 min) */
 const DURABLE_CACHE_TTL_SEC = 900;
 
+/** 
+ * Cache key version - bump when hourlyData shape changes to bust stale cache.
+ * v2: Fixed PascalCase→camelCase field mapping, 72h forecast, proper currentHourKey.
+ */
+const CACHE_KEY_VERSION = 'v2';
+
 /** Cache key for grid data */
-const GRID_CACHE_KEY = 'ercot-last-good-grid';
+const GRID_CACHE_KEY = `ercot-last-good-grid:${CACHE_KEY_VERSION}`;
 
 /** Cache key prefix for price data */
-const PRICES_CACHE_KEY_PREFIX = 'ercot-last-good-prices:';
+const PRICES_CACHE_KEY_PREFIX = `ercot-last-good-prices:${CACHE_KEY_VERSION}:`;
 
 // Memory-level last-good for hot path (doesn't survive cold starts)
 let memoryLastGoodGrid: ErcotCacheData | null = null;
@@ -517,12 +523,19 @@ interface ErcotApiResponse<T> {
  * Convert PascalCase or snake_case field names to camelCase.
  * ERCOT API returns field names like "DeliveryDate", "HourEnding", "SystemTotal".
  * Our TypeScript interfaces expect "deliveryDate", "hourEnding", "systemTotal".
+ * 
+ * Examples:
+ *   DeliveryDate → deliveryDate
+ *   HourEnding → hourEnding  
+ *   SystemTotal → systemTotal
+ *   delivery_date → deliveryDate
+ *   alreadyCamel → alreadyCamel (unchanged)
  */
 function toCamelCase(fieldName: string): string {
-  return fieldName
-    .replace(/^([A-Z])/, (_, c) => c.toLowerCase())
-    .replace(/_([a-z])/g, (_, c) => c.toUpperCase())
-    .replace(/([A-Z])/g, (_, c) => c.toLowerCase());
+  if (fieldName.includes('_')) {
+    return fieldName.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  }
+  return fieldName.charAt(0).toLowerCase() + fieldName.slice(1);
 }
 
 /**
