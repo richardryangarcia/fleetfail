@@ -11,7 +11,17 @@
  * - RT SPP prices: 15 minute TTL (aligned with 15-min intervals)
  * - DAM SPP prices: 24 hour TTL (once per calendar day)
  * 
- * Fallback Chain: memory cache → Next.js cache (durable) → throw (caller handles fixture)
+ * Fallback Chain:
+ * 1. Memory cache (fastest, same-instance only)
+ * 2. Next.js Data Cache via unstable_cache (durable, cross-instance, ~15min revalidate)
+ * 3. Throw / fall back to fixture (caller handles)
+ * 
+ * Durable Last-Good Cache (unstable_cache):
+ * - Uses Next.js Data Cache which persists across Vercel serverless instances
+ * - Survives cold starts within the revalidate window (~15 min)
+ * - Write ONLY on successful live fetch (hard lock)
+ * - Read on circuit breaker open, 429, or other errors
+ * - Keyed by data type: 'ercot-last-good-grid', 'ercot-last-good-prices-{settlementPoint}'
  * 
  * Rate Limiting & Circuit Breaker:
  * - Circuit breaker opens on 429, respects Retry-After (min 60s, max 120s default)
@@ -36,6 +46,7 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot, SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
 import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
+import { unstable_cache } from 'next/cache';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -249,56 +260,169 @@ function createCacheEntry<T>(data: T, ttlMs: number): CacheEntry<T> {
 }
 
 // ============================================================================
-// DURABLE LAST-GOOD CACHE (Next.js unstable_cache)
+// DURABLE LAST-GOOD CACHE (Next.js unstable_cache + memory)
 // ============================================================================
-// Replaces SQLite (unreliable on Vercel serverless). Uses Next.js data cache
-// which persists across function invocations. Keyed by settlementPoint/grid.
-// Write ONLY on successful live responses. Read after memory miss and 429.
+// Uses Next.js Data Cache (via unstable_cache) for cross-instance persistence.
+// The Data Cache is shared across Vercel serverless instances and survives
+// cold starts within the revalidate window (~15 min).
+//
+// Strategy:
+// 1. Memory cache for hot path (fastest, same-instance)
+// 2. unstable_cache for cross-instance durability (survives cold starts)
+// 3. Write ONLY on successful live responses
+// 4. Read from cache on circuit breaker open / 429 / errors
+//
+// Limitation: unstable_cache stores function results, not arbitrary KV.
+// We use a wrapper pattern that stores {ok, data, savedAt} and never throws,
+// so the cache always has a valid entry after the first successful fetch.
 // ============================================================================
 
-interface DurableGridCache {
-  data: ErcotCacheData;
-  cachedAt: string;
+/** Revalidate interval for durable cache (~15 min) */
+const DURABLE_CACHE_REVALIDATE_SEC = 900;
+
+/** Result type for cached fetch - never throws, always returns a result */
+interface CachedFetchResult<T> {
+  ok: boolean;
+  data: T | null;
+  savedAt: string;
+  error?: string;
 }
 
-interface DurablePriceCache {
-  data: PriceCacheData;
-  cachedAt: string;
+// Memory-level last-good for hot path (doesn't survive cold starts)
+let memoryLastGoodGrid: ErcotCacheData | null = null;
+const memoryLastGoodPrices = new Map<string, PriceCacheData>();
+
+/**
+ * Durable grid cache using unstable_cache.
+ * Stores the last successful grid fetch result.
+ * Never throws - returns { ok, data, savedAt } structure.
+ */
+const durableGridCache = unstable_cache(
+  async (dataJson: string | null): Promise<CachedFetchResult<ErcotCacheData>> => {
+    if (dataJson) {
+      const data = JSON.parse(dataJson) as ErcotCacheData;
+      return {
+        ok: true,
+        data: { ...data, dataSource: 'cached', cacheLabel: 'Cached (last-good)' },
+        savedAt: new Date().toISOString(),
+      };
+    }
+    return { ok: false, data: null, savedAt: new Date().toISOString(), error: 'No data provided' };
+  },
+  ['ercot-last-good-grid'],
+  { revalidate: DURABLE_CACHE_REVALIDATE_SEC, tags: ['ercot-cache'] }
+);
+
+/**
+ * Durable price cache using unstable_cache.
+ * Stores the last successful price fetch result per settlement point.
+ * Never throws - returns { ok, data, savedAt } structure.
+ */
+function createDurablePriceCache(settlementPoint: string) {
+  return unstable_cache(
+    async (dataJson: string | null): Promise<CachedFetchResult<PriceCacheData>> => {
+      if (dataJson) {
+        const data = JSON.parse(dataJson) as PriceCacheData;
+        return {
+          ok: true,
+          data: { ...data, dataSource: 'cached' },
+          savedAt: new Date().toISOString(),
+        };
+      }
+      return { ok: false, data: null, savedAt: new Date().toISOString(), error: 'No data provided' };
+    },
+    [`ercot-last-good-prices-${settlementPoint}`],
+    { revalidate: DURABLE_CACHE_REVALIDATE_SEC, tags: ['ercot-cache'] }
+  );
 }
 
-let lastGoodGridData: DurableGridCache | null = null;
-const lastGoodPriceData = new Map<string, DurablePriceCache>();
+// Cache of price cache functions per settlement point
+const durablePriceCaches = new Map<string, ReturnType<typeof createDurablePriceCache>>();
 
-function saveLastGoodGrid(data: ErcotCacheData): void {
-  lastGoodGridData = {
-    data: { ...data, dataSource: 'cached', cacheLabel: 'Cached (last-good)' },
-    cachedAt: new Date().toISOString(),
-  };
+function getDurablePriceCache(settlementPoint: string) {
+  let cache = durablePriceCaches.get(settlementPoint);
+  if (!cache) {
+    cache = createDurablePriceCache(settlementPoint);
+    durablePriceCaches.set(settlementPoint, cache);
+  }
+  return cache;
 }
 
-function loadLastGoodGrid(): ErcotCacheData | null {
-  if (!lastGoodGridData) return null;
-  return {
-    ...lastGoodGridData.data,
-    dataSource: 'cached',
-    cacheLabel: 'Cached (last-good)',
-  };
+/**
+ * Save last-good grid data to both memory and durable cache.
+ * Call ONLY on successful live fetch.
+ */
+async function saveLastGoodGrid(data: ErcotCacheData): Promise<void> {
+  memoryLastGoodGrid = { ...data, dataSource: 'cached', cacheLabel: 'Cached (last-good)' };
+  try {
+    await durableGridCache(JSON.stringify(data));
+  } catch (err) {
+    console.warn('Failed to save to durable grid cache:', err);
+  }
 }
 
-function saveLastGoodPrices(data: PriceCacheData): void {
-  lastGoodPriceData.set(data.settlementPoint, {
-    data: { ...data, dataSource: 'cached' },
-    cachedAt: new Date().toISOString(),
-  });
+/**
+ * Load last-good grid data from memory or durable cache.
+ * Returns null if no last-good exists.
+ */
+async function loadLastGoodGrid(): Promise<ErcotCacheData | null> {
+  // Try memory first (fastest)
+  if (memoryLastGoodGrid) {
+    return memoryLastGoodGrid;
+  }
+  
+  // Try durable cache (survives cold starts)
+  try {
+    const result = await durableGridCache(null);
+    if (result.ok && result.data) {
+      memoryLastGoodGrid = result.data;
+      return result.data;
+    }
+  } catch (err) {
+    console.warn('Failed to load from durable grid cache:', err);
+  }
+  
+  return null;
 }
 
-function loadLastGoodPrices(settlementPoint: string): PriceCacheData | null {
-  const cached = lastGoodPriceData.get(settlementPoint);
-  if (!cached) return null;
-  return {
-    ...cached.data,
-    dataSource: 'cached',
-  };
+/**
+ * Save last-good price data to both memory and durable cache.
+ * Call ONLY on successful live fetch.
+ */
+async function saveLastGoodPrices(data: PriceCacheData): Promise<void> {
+  memoryLastGoodPrices.set(data.settlementPoint, { ...data, dataSource: 'cached' });
+  try {
+    const cache = getDurablePriceCache(data.settlementPoint);
+    await cache(JSON.stringify(data));
+  } catch (err) {
+    console.warn('Failed to save to durable price cache:', err);
+  }
+}
+
+/**
+ * Load last-good price data from memory or durable cache.
+ * Returns null if no last-good exists for this settlement point.
+ */
+async function loadLastGoodPrices(settlementPoint: string): Promise<PriceCacheData | null> {
+  // Try memory first (fastest)
+  const memCached = memoryLastGoodPrices.get(settlementPoint);
+  if (memCached) {
+    return memCached;
+  }
+  
+  // Try durable cache (survives cold starts)
+  try {
+    const cache = getDurablePriceCache(settlementPoint);
+    const result = await cache(null);
+    if (result.ok && result.data) {
+      memoryLastGoodPrices.set(settlementPoint, result.data);
+      return result.data;
+    }
+  } catch (err) {
+    console.warn('Failed to load from durable price cache:', err);
+  }
+  
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -809,7 +933,7 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
   // Check circuit breaker - if open, return last-good or throw
   if (isCircuitBreakerOpen()) {
     const remainingMs = getCircuitBreakerRemainingMs();
-    const lastGood = loadLastGoodGrid();
+    const lastGood = await loadLastGoodGrid();
     if (lastGood) {
       console.log(`Circuit breaker open (${Math.ceil(remainingMs / 1000)}s remaining), returning last-good grid data`);
       return lastGood;
@@ -835,13 +959,13 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
       gridDataCache = createCacheEntry(result, GRID_DATA_TTL_MS);
       
       // Save to last-good cache (write-only-on-success)
-      saveLastGoodGrid(result);
+      await saveLastGoodGrid(result);
       
       return result;
     } catch (error) {
       // On RateLimitedError, return last-good if available
       if (error instanceof RateLimitedError) {
-        const lastGood = loadLastGoodGrid();
+        const lastGood = await loadLastGoodGrid();
         if (lastGood) {
           console.log('Rate limited, returning last-good grid data');
           return lastGood;
@@ -851,7 +975,7 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
       console.error('ERCOT live fetch failed after retries:', error);
       
       // Final fallback: last-good (even if stale)
-      const lastGood = loadLastGoodGrid();
+      const lastGood = await loadLastGoodGrid();
       if (lastGood) {
         console.log('Falling back to last-good ERCOT grid data');
         return lastGood;
@@ -978,13 +1102,15 @@ export function clearTokenCache(): void {
 
 /**
  * Clear all memory caches. Useful for testing or forcing fresh fetches.
+ * Note: This clears memory-level caches only; durable (unstable_cache) entries
+ * persist until revalidation. Use revalidateTag('ercot-cache') to clear those.
  */
 export function clearMemoryCaches(): void {
   gridDataCache = null;
   rtSppCache.clear();
   damSppCache.clear();
-  lastGoodGridData = null;
-  lastGoodPriceData.clear();
+  memoryLastGoodGrid = null;
+  memoryLastGoodPrices.clear();
 }
 
 /**
@@ -1203,7 +1329,7 @@ export async function fetchLiveErcotPrices(
   // Check circuit breaker - if open, return last-good or throw
   if (isCircuitBreakerOpen()) {
     const remainingMs = getCircuitBreakerRemainingMs();
-    const lastGood = loadLastGoodPrices(settlementPoint);
+    const lastGood = await loadLastGoodPrices(settlementPoint);
     if (lastGood) {
       console.log(`Circuit breaker open (${Math.ceil(remainingMs / 1000)}s remaining), returning last-good price data`);
       return lastGood;
@@ -1233,14 +1359,14 @@ export async function fetchLiveErcotPrices(
       
       // Save to last-good cache (write-only-on-success)
       if (fetchedLive) {
-        saveLastGoodPrices(result);
+        await saveLastGoodPrices(result);
       }
       
       return result;
     } catch (error) {
       // On RateLimitedError, return last-good if available
       if (error instanceof RateLimitedError) {
-        const lastGood = loadLastGoodPrices(settlementPoint);
+        const lastGood = await loadLastGoodPrices(settlementPoint);
         if (lastGood) {
           console.log('Rate limited, returning last-good price data');
           return lastGood;
@@ -1250,7 +1376,7 @@ export async function fetchLiveErcotPrices(
       console.error('ERCOT price fetch failed after retries:', error);
       
       // Final fallback: last-good (even if stale)
-      const lastGood = loadLastGoodPrices(settlementPoint);
+      const lastGood = await loadLastGoodPrices(settlementPoint);
       if (lastGood) {
         console.log('Falling back to last-good ERCOT price data');
         return lastGood;
