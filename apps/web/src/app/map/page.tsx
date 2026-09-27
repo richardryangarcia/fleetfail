@@ -369,6 +369,7 @@ export default function MapPage() {
           dispatch={activeDispatch}
           ercotData={ercotData}
           priceData={priceData}
+          selectedHourKey={selectedHourKey}
           isRunning={isRunning}
           arbMode={state.arbMode ?? null}
           autoFireStatus={autoFireStatus}
