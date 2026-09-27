@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
-import { MapSideStrip } from '@/components/MapSideStrip';
+import { MapSideStrip, type ArbModeState } from '@/components/MapSideStrip';
 import { HourSlider } from '@/components/HourSlider';
 
 const TexasMap = dynamic(
@@ -24,6 +24,7 @@ interface MapState {
   events: FleetEvent[];
   activeDispatch: Dispatch | null;
   isRunning: boolean;
+  arbMode?: ArbModeState;
 }
 
 export default function MapPage() {
@@ -117,6 +118,51 @@ export default function MapPage() {
     await fetchState();
   };
 
+  const handleArmArb = async () => {
+    if (!priceData?.arbEdge?.hasEdge) return;
+    await fetch('/api/arb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'arm',
+        chargeWindow: priceData.arbEdge.chargeWindow,
+        dischargeWindow: priceData.arbEdge.dischargeWindow,
+        spreadMwh: priceData.arbEdge.spreadMwh,
+      }),
+    });
+    await fetchState();
+  };
+
+  const handleDisarmArb = async () => {
+    await fetch('/api/arb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'disarm' }),
+    });
+    await fetchState();
+  };
+
+  const handleExecuteArb = async (windowType: 'charge' | 'discharge', targetKw: number) => {
+    const window = windowType === 'charge' 
+      ? state?.arbMode?.chargeWindow 
+      : state?.arbMode?.dischargeWindow;
+    
+    if (!window) return;
+    
+    await fetch('/api/arb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'execute',
+        targetKw,
+        windowType,
+        priceMwh: window.priceMwh,
+        hourEnding: window.hourEnding,
+      }),
+    });
+    await fetchState();
+  };
+
   if (!state) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-nc-bg">
@@ -163,9 +209,13 @@ export default function MapPage() {
           ercotData={ercotData}
           priceData={priceData}
           isRunning={isRunning}
+          arbMode={state.arbMode ?? null}
           onStartDispatch={handleStartDispatch}
           onMassOutage={handleMassOutage}
           onRestoreAll={handleRestoreAll}
+          onArmArb={handleArmArb}
+          onDisarmArb={handleDisarmArb}
+          onExecuteArb={handleExecuteArb}
         />
       </main>
       {/* SYNTHETIC DISCLAIMER - always visible */}

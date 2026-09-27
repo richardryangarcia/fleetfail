@@ -11,6 +11,14 @@ interface ErcotData {
   gridStatus: GridStatus;
 }
 
+interface ArbModeState {
+  armed: boolean;
+  chargeWindow: { hourEnding: number; priceMwh: number } | null;
+  dischargeWindow: { hourEnding: number; priceMwh: number } | null;
+  spreadMwh: number;
+  armedAt: number | null;
+}
+
 interface SimulationState {
   devices: Device[];
   metrics: FleetMetrics;
@@ -19,6 +27,7 @@ interface SimulationState {
   activeDispatch: Dispatch | null;
   isRunning: boolean;
   currentTime: number;
+  arbMode?: ArbModeState;
 }
 
 export default function Home() {
@@ -178,6 +187,10 @@ export default function Home() {
     DISPATCH_PARTIAL: 'text-nc-warn',
     DISPATCH_INSUFFICIENT: 'text-nc-bad',
     COMMAND_EXPIRED: 'text-nc-ink-dim',
+    ARB_ARMED: 'text-nc-accent',
+    ARB_DISARMED: 'text-nc-ink-mute',
+    ARB_CHARGE_WINDOW: 'text-nc-ok',
+    ARB_DISCHARGE_WINDOW: 'text-nc-accent',
   };
 
 
@@ -195,6 +208,27 @@ export default function Home() {
     }
     if (event.type === 'STALE_REJECTED') {
       return event.deviceId ? deviceIdToName(event.deviceId) : '';
+    }
+    if (event.type === 'ARB_ARMED') {
+      const spread = details?.spreadMwh as number | undefined;
+      const chargeHr = details?.chargeWindowHour as number | undefined;
+      const dischargeHr = details?.dischargeWindowHour as number | undefined;
+      return `$${spread?.toFixed(2) ?? '—'}/MWh · charge@${chargeHr ?? '—'}:00 → discharge@${dischargeHr ?? '—'}:00`;
+    }
+    if (event.type === 'ARB_DISARMED') {
+      return 'arb mode disarmed';
+    }
+    if (event.type === 'ARB_CHARGE_WINDOW') {
+      const kw = details?.targetKw as number | undefined;
+      const price = details?.priceMwh as number | undefined;
+      const hr = details?.hourEnding as number | undefined;
+      return `${kw ?? '—'}kW @$${price?.toFixed(2) ?? '—'}/MWh (hr ${hr ?? '—'})`;
+    }
+    if (event.type === 'ARB_DISCHARGE_WINDOW') {
+      const kw = details?.targetKw as number | undefined;
+      const price = details?.priceMwh as number | undefined;
+      const hr = details?.hourEnding as number | undefined;
+      return `${kw ?? '—'}kW @$${price?.toFixed(2) ?? '—'}/MWh (hr ${hr ?? '—'})`;
     }
     if (event.deviceId) {
       return deviceIdToName(event.deviceId);

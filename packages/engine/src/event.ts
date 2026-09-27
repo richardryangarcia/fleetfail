@@ -162,3 +162,48 @@ export function commandExpired(
 ): FleetEvent {
   return createEvent('COMMAND_EXPIRED', timestamp, {}, { dispatchId, deviceId, commandId });
 }
+
+export function arbArmed(
+  timestamp: number,
+  chargeWindowHour: number,
+  dischargeWindowHour: number,
+  spreadMwh: number
+): FleetEvent {
+  return createEvent('ARB_ARMED', timestamp, { 
+    chargeWindowHour, 
+    dischargeWindowHour, 
+    spreadMwh 
+  }, {});
+}
+
+export function arbDisarmed(timestamp: number): FleetEvent {
+  return createEvent('ARB_DISARMED', timestamp, {}, {});
+}
+
+export function arbChargeWindow(
+  timestamp: number,
+  dispatchId: string,
+  targetKw: number,
+  priceMwh: number,
+  hourEnding: number
+): FleetEvent {
+  return createEvent('ARB_CHARGE_WINDOW', timestamp, { 
+    targetKw, 
+    priceMwh, 
+    hourEnding 
+  }, { dispatchId });
+}
+
+export function arbDischargeWindow(
+  timestamp: number,
+  dispatchId: string,
+  targetKw: number,
+  priceMwh: number,
+  hourEnding: number
+): FleetEvent {
+  return createEvent('ARB_DISCHARGE_WINDOW', timestamp, { 
+    targetKw, 
+    priceMwh, 
+    hourEnding 
+  }, { dispatchId });
+}

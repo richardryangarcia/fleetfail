@@ -1,10 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import type { FleetMetrics, Dispatch, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
+import type { FleetMetrics, Dispatch, ErcotCacheData, PriceCacheData, ArbWindow } from '@fleetfail/engine';
 import Link from 'next/link';
 
 const MAP_DEFAULT_TARGET_KW = 1500;
+
+export interface ArbModeState {
+  armed: boolean;
+  chargeWindow: ArbWindow | null;
+  dischargeWindow: ArbWindow | null;
+  spreadMwh: number;
+  armedAt: number | null;
+}
 
 interface MapSideStripProps {
   metrics: FleetMetrics;
@@ -12,9 +20,13 @@ interface MapSideStripProps {
   ercotData: ErcotCacheData | null;
   priceData: PriceCacheData | null;
   isRunning: boolean;
+  arbMode: ArbModeState | null;
   onStartDispatch: (targetKw: number) => void;
   onMassOutage?: (zoneId?: string) => void;
   onRestoreAll?: () => void;
+  onArmArb?: () => void;
+  onDisarmArb?: () => void;
+  onExecuteArb?: (windowType: 'charge' | 'discharge', targetKw: number) => void;
 }
 
 function MetricRow({ label, value, unit, variant }: { label: string; value: number | string; unit?: string; variant?: 'ok' | 'bad' | 'accent' | 'warn' | 'mute' }) {
@@ -42,11 +54,16 @@ export function MapSideStrip({
   ercotData,
   priceData,
   isRunning,
+  arbMode,
   onStartDispatch,
   onMassOutage,
   onRestoreAll,
+  onArmArb,
+  onDisarmArb,
+  onExecuteArb,
 }: MapSideStripProps) {
   const [targetKw, setTargetKw] = useState(MAP_DEFAULT_TARGET_KW);
+  const [arbTargetKw, setArbTargetKw] = useState(1000);
   
   const progressPct = dispatch && dispatch.targetKw > 0
     ? (dispatch.deliveredKw / dispatch.targetKw) * 100
@@ -215,6 +232,88 @@ export function MapSideStrip({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Arm Arb Mode Control */}
+      <div className="p-3 border-b border-nc-line bg-[#0c0a10]">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[9px] uppercase tracking-widest text-nc-ink-mute font-semibold">
+            Arb Mode
+          </span>
+          {arbMode?.armed ? (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-[#1a1810] text-nc-accent border border-nc-accent-dim">
+              <span className="w-1.5 h-1.5 bg-nc-accent rounded-full animate-pulse" />
+              ARMED
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono font-medium bg-nc-panel text-nc-ink-mute border border-nc-line">
+              DISARMED
+            </span>
+          )}
+        </div>
+        
+        {priceData?.arbEdge?.hasEdge ? (
+          <>
+            {!arbMode?.armed ? (
+              <button
+                onClick={onArmArb}
+                disabled={isRunning}
+                className="w-full py-2 text-left px-3 border border-nc-accent-dim text-nc-accent bg-[#161208] hover:bg-[#1e180a] disabled:border-nc-line-strong disabled:text-nc-ink-dim disabled:bg-nc-elev text-[12px] font-medium transition-colors mb-2"
+              >
+                Arm Arb Mode
+                <span className="block text-[10px] font-mono text-nc-ink-mute mt-0.5">
+                  charge @${priceData.arbEdge.chargeWindow?.priceMwh.toFixed(2)} → discharge @${priceData.arbEdge.dischargeWindow?.priceMwh.toFixed(2)}
+                </span>
+              </button>
+            ) : (
+              <>
+                <div className="mb-2">
+                  <label className="block text-[10px] text-nc-ink-dim mb-1">Arb Target (kW)</label>
+                  <input
+                    type="number"
+                    value={arbTargetKw}
+                    onChange={(e) => setArbTargetKw(Number(e.target.value))}
+                    className="w-full bg-nc-bg border border-nc-line-strong text-nc-num font-mono text-xs px-2 py-1.5 outline-none focus:border-nc-accent-dim"
+                    min={0}
+                    max={5000}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <button
+                    onClick={() => onExecuteArb?.('charge', arbTargetKw)}
+                    disabled={isRunning}
+                    className="py-2 px-2 border border-[#1e4a32] text-nc-ok bg-[#0a1810] hover:bg-[#0e2218] disabled:border-nc-line-strong disabled:text-nc-ink-dim disabled:bg-nc-elev text-[11px] font-medium transition-colors"
+                  >
+                    Charge
+                    <span className="block text-[9px] font-mono text-nc-ink-mute mt-0.5">
+                      @${arbMode.chargeWindow?.priceMwh.toFixed(2) ?? '—'}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => onExecuteArb?.('discharge', arbTargetKw)}
+                    disabled={isRunning}
+                    className="py-2 px-2 border border-nc-accent-dim text-nc-accent bg-[#161208] hover:bg-[#1e180a] disabled:border-nc-line-strong disabled:text-nc-ink-dim disabled:bg-nc-elev text-[11px] font-medium transition-colors"
+                  >
+                    Discharge
+                    <span className="block text-[9px] font-mono text-nc-ink-mute mt-0.5">
+                      @${arbMode.dischargeWindow?.priceMwh.toFixed(2) ?? '—'}
+                    </span>
+                  </button>
+                </div>
+                <button
+                  onClick={onDisarmArb}
+                  className="w-full py-1.5 text-center px-3 border border-nc-line-strong text-nc-ink-dim bg-nc-elev hover:bg-[#151820] text-[11px] font-medium transition-colors"
+                >
+                  Disarm
+                </button>
+              </>
+            )}
+          </>
+        ) : (
+          <div className="text-[10px] font-mono text-nc-ink-dim">
+            No arb edge available — spread below $5/MWh threshold
+          </div>
+        )}
       </div>
 
       {/* Dispatch Control Block */}
