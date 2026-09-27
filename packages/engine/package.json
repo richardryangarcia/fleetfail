@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./ercot-prices": {
+      "types": "./dist/ercot-prices.d.ts",
+      "import": "./dist/ercot-prices.js"
     }
   },
   "scripts": {
