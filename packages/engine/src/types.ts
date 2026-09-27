@@ -185,6 +185,10 @@ export interface OrchestratorConfig {
   tickIntervalMs: number;
   /** Random seed for deterministic simulation */
   seed: number;
+  /** Maximum commands to send per tick (pacing knob) */
+  maxSendsPerTick: number;
+  /** Maximum acks to process per tick (pacing knob) */
+  maxAcksPerTick: number;
 }
 
 export const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -194,4 +198,6 @@ export const DEFAULT_CONFIG: OrchestratorConfig = {
   commandExpiryMs: 60000,
   tickIntervalMs: 1000,
   seed: 42,
+  maxSendsPerTick: 2,
+  maxAcksPerTick: 1,
 };

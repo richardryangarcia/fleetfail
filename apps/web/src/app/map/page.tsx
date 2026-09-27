@@ -98,7 +98,7 @@ export default function MapPage() {
       devicesToOffline = devicesToOffline.filter(d => d.zone === zoneId);
     }
     
-    const count = Math.min(10, devicesToOffline.length);
+    const count = Math.min(100, devicesToOffline.length);
     for (let i = 0; i < count; i++) {
       await fetch('/api/fault', {
         method: 'POST',
