@@ -743,11 +743,6 @@ export default function Home() {
         </aside>
       </div>
 
-      {/* Footer - 28px */}
-      <footer className="h-7 border-t border-nc-line-strong bg-[#08090b] flex items-center px-4 text-[10px] tracking-wider text-nc-ink-mute font-mono uppercase shrink-0">
-        <strong className="text-nc-warn font-semibold mr-2">SYNTHETIC DISCLAIMER</strong>
-        Simulated ERCOT / fleet telemetry for hackathon demo only. Not connected to live grid or production devices.
-      </footer>
     </div>
   );
 }

@@ -380,13 +380,6 @@ export default function MapPage() {
           onExecuteArb={handleExecuteArb}
         />
       </main>
-      {/* SYNTHETIC DISCLAIMER - always visible */}
-      <footer className="h-7 bg-nc-panel border-t border-nc-line-strong flex items-center px-4 shrink-0">
-        <span className="text-[10px] font-mono tracking-wider text-nc-warn font-semibold uppercase mr-2">SYNTHETIC DISCLAIMER</span>
-        <span className="text-[10px] font-mono tracking-wide text-nc-ink-mute uppercase">
-          Simulated ERCOT / fleet telemetry for hackathon demo only. Not connected to live grid or production devices.
-        </span>
-      </footer>
     </div>
   );
 }
