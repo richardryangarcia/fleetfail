@@ -273,7 +273,7 @@ export function generateHourlyFixtureData(baseZones: ErcotZoneLoad[], snapshotTi
   const hourlyData: ErcotHourlySnapshot[] = [];
   const currentHour = snapshotTime.getHours();
   
-  for (let offset = -12; offset <= 12; offset++) {
+  for (let offset = -72; offset <= 12; offset++) {
     const { hourKey, deliveryDate, hourEnding } = generateHourKey(snapshotTime, offset);
     const isActual = offset <= 0;
     const zones = applyHourlyVariation(baseZones, currentHour + offset, isActual);
