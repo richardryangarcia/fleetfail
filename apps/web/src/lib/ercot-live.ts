@@ -13,15 +13,17 @@
  * 
  * Fallback Chain:
  * 1. Memory cache (fastest, same-instance only)
- * 2. Next.js Data Cache via unstable_cache (durable, cross-instance, ~15min revalidate)
+ * 2. Vercel Runtime Cache via @vercel/functions getCache (durable, cross-instance)
  * 3. Throw / fall back to fixture (caller handles)
  * 
- * Durable Last-Good Cache (unstable_cache):
- * - Uses Next.js Data Cache which persists across Vercel serverless instances
- * - Survives cold starts within the revalidate window (~15 min)
+ * Durable Last-Good Cache (Vercel Runtime Cache):
+ * - Uses Vercel Runtime Cache with proper get/set KV semantics
+ * - Survives cold starts and is shared across Vercel serverless instances
+ * - TTL: ~15 minutes (900 seconds)
  * - Write ONLY on successful live fetch (hard lock)
  * - Read on circuit breaker open, 429, or other errors
- * - Keyed by data type: 'ercot-last-good-grid', 'ercot-last-good-prices-{settlementPoint}'
+ * - Keys: 'ercot-last-good-grid', 'ercot-last-good-prices:{settlementPoint}'
+ * - Tags: 'ercot-cache', 'ercot-grid', 'ercot-prices' for bulk invalidation
  * 
  * Rate Limiting & Circuit Breaker:
  * - Circuit breaker opens on 429, respects Retry-After (min 60s, max 120s default)
@@ -34,7 +36,7 @@
  * 
  * Data Source Honesty:
  * - dataSource: 'live' ONLY when current request's live fetch succeeds
- * - dataSource: 'cached' for memory/Next.js cache or fixture fallback
+ * - dataSource: 'cached' for memory/Vercel cache or fixture fallback
  * 
  * Environment variables (never expose to client):
  * - ERCOT_API_USERNAME
@@ -46,7 +48,7 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot, SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
 import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
-import { unstable_cache } from 'next/cache';
+import { getCache } from '@vercel/functions';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -260,109 +262,80 @@ function createCacheEntry<T>(data: T, ttlMs: number): CacheEntry<T> {
 }
 
 // ============================================================================
-// DURABLE LAST-GOOD CACHE (Next.js unstable_cache + memory)
+// DURABLE LAST-GOOD CACHE (Vercel Runtime Cache)
 // ============================================================================
-// Uses Next.js Data Cache (via unstable_cache) for cross-instance persistence.
-// The Data Cache is shared across Vercel serverless instances and survives
-// cold starts within the revalidate window (~15 min).
+// Uses Vercel Runtime Cache (@vercel/functions getCache) for cross-instance
+// persistence with proper get/set KV semantics. The Runtime Cache survives
+// cold starts and is shared across Vercel serverless instances.
 //
 // Strategy:
-// 1. Memory cache for hot path (fastest, same-instance)
-// 2. unstable_cache for cross-instance durability (survives cold starts)
-// 3. Write ONLY on successful live responses
+// 1. Memory cache for hot path (fastest, same-instance only)
+// 2. Vercel Runtime Cache for cross-instance durability (survives cold starts)
+// 3. Write ONLY on successful live responses (hard lock)
 // 4. Read from cache on circuit breaker open / 429 / errors
 //
-// Limitation: unstable_cache stores function results, not arbitrary KV.
-// We use a wrapper pattern that stores {ok, data, savedAt} and never throws,
-// so the cache always has a valid entry after the first successful fetch.
+// Cache Keys:
+// - 'ercot-last-good-grid' for grid data
+// - 'ercot-last-good-prices:{settlementPoint}' for price data
+// TTL: ~15 minutes (900 seconds)
 // ============================================================================
 
-/** Revalidate interval for durable cache (~15 min) */
-const DURABLE_CACHE_REVALIDATE_SEC = 900;
+/** TTL for durable cache entries (~15 min) */
+const DURABLE_CACHE_TTL_SEC = 900;
 
-/** Result type for cached fetch - never throws, always returns a result */
-interface CachedFetchResult<T> {
-  ok: boolean;
-  data: T | null;
-  savedAt: string;
-  error?: string;
-}
+/** Cache key for grid data */
+const GRID_CACHE_KEY = 'ercot-last-good-grid';
+
+/** Cache key prefix for price data */
+const PRICES_CACHE_KEY_PREFIX = 'ercot-last-good-prices:';
 
 // Memory-level last-good for hot path (doesn't survive cold starts)
 let memoryLastGoodGrid: ErcotCacheData | null = null;
 const memoryLastGoodPrices = new Map<string, PriceCacheData>();
 
 /**
- * Durable grid cache using unstable_cache.
- * Stores the last successful grid fetch result.
- * Never throws - returns { ok, data, savedAt } structure.
+ * Get the Vercel Runtime Cache instance.
+ * Returns null if not available (e.g., local dev without Vercel).
  */
-const durableGridCache = unstable_cache(
-  async (dataJson: string | null): Promise<CachedFetchResult<ErcotCacheData>> => {
-    if (dataJson) {
-      const data = JSON.parse(dataJson) as ErcotCacheData;
-      return {
-        ok: true,
-        data: { ...data, dataSource: 'cached', cacheLabel: 'Cached (last-good)' },
-        savedAt: new Date().toISOString(),
-      };
-    }
-    return { ok: false, data: null, savedAt: new Date().toISOString(), error: 'No data provided' };
-  },
-  ['ercot-last-good-grid'],
-  { revalidate: DURABLE_CACHE_REVALIDATE_SEC, tags: ['ercot-cache'] }
-);
-
-/**
- * Durable price cache using unstable_cache.
- * Stores the last successful price fetch result per settlement point.
- * Never throws - returns { ok, data, savedAt } structure.
- */
-function createDurablePriceCache(settlementPoint: string) {
-  return unstable_cache(
-    async (dataJson: string | null): Promise<CachedFetchResult<PriceCacheData>> => {
-      if (dataJson) {
-        const data = JSON.parse(dataJson) as PriceCacheData;
-        return {
-          ok: true,
-          data: { ...data, dataSource: 'cached' },
-          savedAt: new Date().toISOString(),
-        };
-      }
-      return { ok: false, data: null, savedAt: new Date().toISOString(), error: 'No data provided' };
-    },
-    [`ercot-last-good-prices-${settlementPoint}`],
-    { revalidate: DURABLE_CACHE_REVALIDATE_SEC, tags: ['ercot-cache'] }
-  );
-}
-
-// Cache of price cache functions per settlement point
-const durablePriceCaches = new Map<string, ReturnType<typeof createDurablePriceCache>>();
-
-function getDurablePriceCache(settlementPoint: string) {
-  let cache = durablePriceCaches.get(settlementPoint);
-  if (!cache) {
-    cache = createDurablePriceCache(settlementPoint);
-    durablePriceCaches.set(settlementPoint, cache);
+function getRuntimeCache() {
+  try {
+    return getCache();
+  } catch {
+    // Runtime Cache not available (local dev, non-Vercel deployment)
+    return null;
   }
-  return cache;
 }
 
 /**
- * Save last-good grid data to both memory and durable cache.
+ * Save last-good grid data to both memory and Vercel Runtime Cache.
  * Call ONLY on successful live fetch.
  */
 async function saveLastGoodGrid(data: ErcotCacheData): Promise<void> {
-  memoryLastGoodGrid = { ...data, dataSource: 'cached', cacheLabel: 'Cached (last-good)' };
-  try {
-    await durableGridCache(JSON.stringify(data));
-  } catch (err) {
-    console.warn('Failed to save to durable grid cache:', err);
+  const cachedData: ErcotCacheData = {
+    ...data,
+    dataSource: 'cached',
+    cacheLabel: 'Cached (last-good)',
+  };
+  
+  // Always update memory
+  memoryLastGoodGrid = cachedData;
+  
+  // Try to persist to Vercel Runtime Cache
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      await cache.set(GRID_CACHE_KEY, cachedData, {
+        ttl: DURABLE_CACHE_TTL_SEC,
+        tags: ['ercot-cache', 'ercot-grid'],
+      });
+    } catch (err) {
+      console.warn('Failed to save to Vercel Runtime Cache (grid):', err);
+    }
   }
 }
 
 /**
- * Load last-good grid data from memory or durable cache.
+ * Load last-good grid data from memory or Vercel Runtime Cache.
  * Returns null if no last-good exists.
  */
 async function loadLastGoodGrid(): Promise<ErcotCacheData | null> {
@@ -371,36 +344,54 @@ async function loadLastGoodGrid(): Promise<ErcotCacheData | null> {
     return memoryLastGoodGrid;
   }
   
-  // Try durable cache (survives cold starts)
-  try {
-    const result = await durableGridCache(null);
-    if (result.ok && result.data) {
-      memoryLastGoodGrid = result.data;
-      return result.data;
+  // Try Vercel Runtime Cache (survives cold starts)
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      const cached = await cache.get(GRID_CACHE_KEY) as ErcotCacheData | null;
+      if (cached) {
+        // Populate memory cache from durable cache
+        memoryLastGoodGrid = cached;
+        return cached;
+      }
+    } catch (err) {
+      console.warn('Failed to load from Vercel Runtime Cache (grid):', err);
     }
-  } catch (err) {
-    console.warn('Failed to load from durable grid cache:', err);
   }
   
   return null;
 }
 
 /**
- * Save last-good price data to both memory and durable cache.
+ * Save last-good price data to both memory and Vercel Runtime Cache.
  * Call ONLY on successful live fetch.
  */
 async function saveLastGoodPrices(data: PriceCacheData): Promise<void> {
-  memoryLastGoodPrices.set(data.settlementPoint, { ...data, dataSource: 'cached' });
-  try {
-    const cache = getDurablePriceCache(data.settlementPoint);
-    await cache(JSON.stringify(data));
-  } catch (err) {
-    console.warn('Failed to save to durable price cache:', err);
+  const cachedData: PriceCacheData = {
+    ...data,
+    dataSource: 'cached',
+  };
+  
+  // Always update memory
+  memoryLastGoodPrices.set(data.settlementPoint, cachedData);
+  
+  // Try to persist to Vercel Runtime Cache
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      const key = `${PRICES_CACHE_KEY_PREFIX}${data.settlementPoint}`;
+      await cache.set(key, cachedData, {
+        ttl: DURABLE_CACHE_TTL_SEC,
+        tags: ['ercot-cache', 'ercot-prices'],
+      });
+    } catch (err) {
+      console.warn('Failed to save to Vercel Runtime Cache (prices):', err);
+    }
   }
 }
 
 /**
- * Load last-good price data from memory or durable cache.
+ * Load last-good price data from memory or Vercel Runtime Cache.
  * Returns null if no last-good exists for this settlement point.
  */
 async function loadLastGoodPrices(settlementPoint: string): Promise<PriceCacheData | null> {
@@ -410,16 +401,20 @@ async function loadLastGoodPrices(settlementPoint: string): Promise<PriceCacheDa
     return memCached;
   }
   
-  // Try durable cache (survives cold starts)
-  try {
-    const cache = getDurablePriceCache(settlementPoint);
-    const result = await cache(null);
-    if (result.ok && result.data) {
-      memoryLastGoodPrices.set(settlementPoint, result.data);
-      return result.data;
+  // Try Vercel Runtime Cache (survives cold starts)
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      const key = `${PRICES_CACHE_KEY_PREFIX}${settlementPoint}`;
+      const cached = await cache.get(key) as PriceCacheData | null;
+      if (cached) {
+        // Populate memory cache from durable cache
+        memoryLastGoodPrices.set(settlementPoint, cached);
+        return cached;
+      }
+    } catch (err) {
+      console.warn('Failed to load from Vercel Runtime Cache (prices):', err);
     }
-  } catch (err) {
-    console.warn('Failed to load from durable price cache:', err);
   }
   
   return null;
