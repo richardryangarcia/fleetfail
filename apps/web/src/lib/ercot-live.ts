@@ -11,18 +11,32 @@
  * - RT SPP prices: 15 minute TTL (aligned with 15-min intervals)
  * - DAM SPP prices: 24 hour TTL (once per calendar day)
  * 
- * Fallback Chain: memory cache → last-good SQLite → throw (caller handles fixture)
+ * Fallback Chain:
+ * 1. Memory cache (fastest, same-instance only)
+ * 2. Vercel Runtime Cache via @vercel/functions getCache (durable, cross-instance)
+ * 3. Throw / fall back to fixture (caller handles)
  * 
- * Rate Limiting:
+ * Durable Last-Good Cache (Vercel Runtime Cache):
+ * - Uses Vercel Runtime Cache with proper get/set KV semantics
+ * - Survives cold starts and is shared across Vercel serverless instances
+ * - TTL: ~15 minutes (900 seconds)
+ * - Write ONLY on successful live fetch (hard lock)
+ * - Read on circuit breaker open, 429, or other errors
+ * - Keys: 'ercot-last-good-grid', 'ercot-last-good-prices:{settlementPoint}'
+ * - Tags: 'ercot-cache', 'ercot-grid', 'ercot-prices' for bulk invalidation
+ * 
+ * Rate Limiting & Circuit Breaker:
+ * - Circuit breaker opens on 429, respects Retry-After (min 60s, max 120s default)
+ * - While breaker open: skip network, return memory/last-good OR throw RateLimitedError
+ * - Single-flight mutex prevents parallel stampede on one instance
  * - Serialized outbound calls (no Promise.all burst)
  * - Stagger delay between endpoint calls
- * - Respects Retry-After header on 429 responses
- * - Retries up to 2 times with exponential backoff
+ * - Retries up to 2 times with exponential backoff (longer on 429)
  * - If TTL not expired, returns cached without hitting network
  * 
  * Data Source Honesty:
  * - dataSource: 'live' ONLY when current request's live fetch succeeds
- * - dataSource: 'cached' for memory/SQLite cache or fixture fallback
+ * - dataSource: 'cached' for memory/Vercel cache or fixture fallback
  * 
  * Environment variables (never expose to client):
  * - ERCOT_API_USERNAME
@@ -32,8 +46,9 @@
 
 import axios from 'axios';
 import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
-import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot } from '@fleetfail/engine';
-import { FleetDb } from '@fleetfail/engine';
+import type { ErcotCacheData, ErcotZoneLoad, ErcotGridSummary, ErcotHourlySnapshot, SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
+import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
+import { getCache } from '@vercel/functions';
 
 const ERCOT_TOKEN_URL = 'https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/B2C_1_PUBAPI-ROPC-FLOW/oauth2/v2.0/token';
 const ERCOT_API_BASE = 'https://api.ercot.com/api/public-reports';
@@ -135,9 +150,85 @@ const MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 1000;
 const STAGGER_DELAY_MS = 200;
 
-let ercotDb: FleetDb | null = null;
-let ercotDbInitFailed = false;
-let ercotDbErrorLogged = false;
+/** Minimum circuit breaker cooldown on 429 (60 seconds) */
+const MIN_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+/** Default circuit breaker cooldown when no Retry-After header (90 seconds) */
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 90 * 1000;
+/** Maximum circuit breaker cooldown (120 seconds) */
+const MAX_RATE_LIMIT_COOLDOWN_MS = 120 * 1000;
+/** Minimum backoff on 429 during retry (10 seconds) */
+const MIN_429_BACKOFF_MS = 10 * 1000;
+
+// ============================================================================
+// CIRCUIT BREAKER STATE
+// ============================================================================
+// Opens on 429 to prevent hammering ERCOT. Honors Retry-After header.
+// While open: skip network, return memory/last-good OR throw RateLimitedError.
+// ============================================================================
+
+let circuitBreakerOpenUntil: number = 0;
+
+/**
+ * Custom error thrown when circuit breaker is open (ERCOT rate limited).
+ * Routes should catch this and return last-good data with 'cached' label.
+ */
+export class RateLimitedError extends Error {
+  public readonly retryAfterMs: number;
+  
+  constructor(retryAfterMs: number) {
+    const retryAfterSec = Math.ceil(retryAfterMs / 1000);
+    super(`ERCOT rate limited, retry after ${retryAfterSec}s`);
+    this.name = 'RateLimitedError';
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function isCircuitBreakerOpen(): boolean {
+  return Date.now() < circuitBreakerOpenUntil;
+}
+
+function openCircuitBreaker(retryAfterMs: number): void {
+  const cooldown = Math.min(
+    Math.max(retryAfterMs, MIN_RATE_LIMIT_COOLDOWN_MS),
+    MAX_RATE_LIMIT_COOLDOWN_MS
+  );
+  const openUntil = Date.now() + cooldown;
+  if (openUntil > circuitBreakerOpenUntil) {
+    circuitBreakerOpenUntil = openUntil;
+    console.warn(`ERCOT circuit breaker opened for ${Math.ceil(cooldown / 1000)}s (until ${new Date(openUntil).toISOString()})`);
+  }
+}
+
+function getCircuitBreakerRemainingMs(): number {
+  return Math.max(0, circuitBreakerOpenUntil - Date.now());
+}
+
+// ============================================================================
+// SINGLE-FLIGHT MUTEX
+// ============================================================================
+// Prevents parallel stampede: only one in-flight request per resource type.
+// Other callers wait for the first request to complete.
+// ============================================================================
+
+type FlightKey = 'grid' | `prices:${string}`;
+const inFlightRequests = new Map<FlightKey, Promise<unknown>>();
+
+async function singleFlight<T>(
+  key: FlightKey,
+  fn: () => Promise<T>
+): Promise<T> {
+  const existing = inFlightRequests.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  
+  const promise = fn().finally(() => {
+    inFlightRequests.delete(key);
+  });
+  
+  inFlightRequests.set(key, promise);
+  return promise;
+}
 
 // ============================================================================
 // MEMORY CACHE WITH TTL
@@ -170,28 +261,163 @@ function createCacheEntry<T>(data: T, ttlMs: number): CacheEntry<T> {
   };
 }
 
+// ============================================================================
+// DURABLE LAST-GOOD CACHE (Vercel Runtime Cache)
+// ============================================================================
+// Uses Vercel Runtime Cache (@vercel/functions getCache) for cross-instance
+// persistence with proper get/set KV semantics. The Runtime Cache survives
+// cold starts and is shared across Vercel serverless instances.
+//
+// Strategy:
+// 1. Memory cache for hot path (fastest, same-instance only)
+// 2. Vercel Runtime Cache for cross-instance durability (survives cold starts)
+// 3. Write ONLY on successful live responses (hard lock)
+// 4. Read from cache on circuit breaker open / 429 / errors
+//
+// Cache Keys:
+// - 'ercot-last-good-grid' for grid data
+// - 'ercot-last-good-prices:{settlementPoint}' for price data
+// TTL: ~15 minutes (900 seconds)
+// ============================================================================
+
+/** TTL for durable cache entries (~15 min) */
+const DURABLE_CACHE_TTL_SEC = 900;
+
+/** Cache key for grid data */
+const GRID_CACHE_KEY = 'ercot-last-good-grid';
+
+/** Cache key prefix for price data */
+const PRICES_CACHE_KEY_PREFIX = 'ercot-last-good-prices:';
+
+// Memory-level last-good for hot path (doesn't survive cold starts)
+let memoryLastGoodGrid: ErcotCacheData | null = null;
+const memoryLastGoodPrices = new Map<string, PriceCacheData>();
+
 /**
- * Get the ERCOT SQLite cache database.
- * Returns null if better-sqlite3 bindings are unavailable (e.g., Next.js webpack).
- * Logs the error once on first failure, then silently returns null.
+ * Get the Vercel Runtime Cache instance.
+ * Returns null if not available (e.g., local dev without Vercel).
  */
-function getErcotDb(): FleetDb | null {
-  if (ercotDbInitFailed) {
+function getRuntimeCache() {
+  try {
+    return getCache();
+  } catch {
+    // Runtime Cache not available (local dev, non-Vercel deployment)
     return null;
   }
-  if (!ercotDb) {
+}
+
+/**
+ * Save last-good grid data to both memory and Vercel Runtime Cache.
+ * Call ONLY on successful live fetch.
+ */
+async function saveLastGoodGrid(data: ErcotCacheData): Promise<void> {
+  const cachedData: ErcotCacheData = {
+    ...data,
+    dataSource: 'cached',
+    cacheLabel: 'Cached (last-good)',
+  };
+  
+  // Always update memory
+  memoryLastGoodGrid = cachedData;
+  
+  // Try to persist to Vercel Runtime Cache
+  const cache = getRuntimeCache();
+  if (cache) {
     try {
-      ercotDb = new FleetDb({ path: '.ercot-cache.db', inMemory: false });
+      await cache.set(GRID_CACHE_KEY, cachedData, {
+        ttl: DURABLE_CACHE_TTL_SEC,
+        tags: ['ercot-cache', 'ercot-grid'],
+      });
     } catch (err) {
-      ercotDbInitFailed = true;
-      if (!ercotDbErrorLogged) {
-        ercotDbErrorLogged = true;
-        console.warn('SQLite cache unavailable (better-sqlite3 bindings missing), falling back to fixture:', err);
-      }
-      return null;
+      console.warn('Failed to save to Vercel Runtime Cache (grid):', err);
     }
   }
-  return ercotDb;
+}
+
+/**
+ * Load last-good grid data from memory or Vercel Runtime Cache.
+ * Returns null if no last-good exists.
+ */
+async function loadLastGoodGrid(): Promise<ErcotCacheData | null> {
+  // Try memory first (fastest)
+  if (memoryLastGoodGrid) {
+    return memoryLastGoodGrid;
+  }
+  
+  // Try Vercel Runtime Cache (survives cold starts)
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      const cached = await cache.get(GRID_CACHE_KEY) as ErcotCacheData | null;
+      if (cached) {
+        // Populate memory cache from durable cache
+        memoryLastGoodGrid = cached;
+        return cached;
+      }
+    } catch (err) {
+      console.warn('Failed to load from Vercel Runtime Cache (grid):', err);
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Save last-good price data to both memory and Vercel Runtime Cache.
+ * Call ONLY on successful live fetch.
+ */
+async function saveLastGoodPrices(data: PriceCacheData): Promise<void> {
+  const cachedData: PriceCacheData = {
+    ...data,
+    dataSource: 'cached',
+  };
+  
+  // Always update memory
+  memoryLastGoodPrices.set(data.settlementPoint, cachedData);
+  
+  // Try to persist to Vercel Runtime Cache
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      const key = `${PRICES_CACHE_KEY_PREFIX}${data.settlementPoint}`;
+      await cache.set(key, cachedData, {
+        ttl: DURABLE_CACHE_TTL_SEC,
+        tags: ['ercot-cache', 'ercot-prices'],
+      });
+    } catch (err) {
+      console.warn('Failed to save to Vercel Runtime Cache (prices):', err);
+    }
+  }
+}
+
+/**
+ * Load last-good price data from memory or Vercel Runtime Cache.
+ * Returns null if no last-good exists for this settlement point.
+ */
+async function loadLastGoodPrices(settlementPoint: string): Promise<PriceCacheData | null> {
+  // Try memory first (fastest)
+  const memCached = memoryLastGoodPrices.get(settlementPoint);
+  if (memCached) {
+    return memCached;
+  }
+  
+  // Try Vercel Runtime Cache (survives cold starts)
+  const cache = getRuntimeCache();
+  if (cache) {
+    try {
+      const key = `${PRICES_CACHE_KEY_PREFIX}${settlementPoint}`;
+      const cached = await cache.get(key) as PriceCacheData | null;
+      if (cached) {
+        // Populate memory cache from durable cache
+        memoryLastGoodPrices.set(settlementPoint, cached);
+        return cached;
+      }
+    } catch (err) {
+      console.warn('Failed to load from Vercel Runtime Cache (prices):', err);
+    }
+  }
+  
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -236,17 +462,31 @@ async function executeWithRetry<T>(
     } catch (error) {
       lastError = error;
       
+      if (isRateLimitError(error)) {
+        const retryAfterMs = getRetryAfterMs(error);
+        openCircuitBreaker(retryAfterMs);
+        
+        if (attempt === MAX_RETRIES) {
+          throw new RateLimitedError(retryAfterMs);
+        }
+        
+        const delayMs = Math.max(retryAfterMs, MIN_429_BACKOFF_MS);
+        console.warn(
+          `ERCOT API ${request.description} rate limited (attempt ${attempt + 1}/${MAX_RETRIES + 1}), ` +
+          `retrying in ${Math.ceil(delayMs / 1000)}s`
+        );
+        await sleep(delayMs);
+        continue;
+      }
+      
       if (!isRetryableError(error) || attempt === MAX_RETRIES) {
         throw error;
       }
       
-      const delayMs = isRateLimitError(error) 
-        ? getRetryAfterMs(error) 
-        : DEFAULT_RETRY_DELAY_MS * Math.pow(2, attempt);
-      
+      const delayMs = DEFAULT_RETRY_DELAY_MS * Math.pow(2, attempt);
       console.warn(
         `ERCOT API ${request.description} failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}), ` +
-        `retrying in ${delayMs}ms: ${error.message}`
+        `retrying in ${delayMs}ms: ${(error as Error).message}`
       );
       
       await sleep(delayMs);
@@ -626,13 +866,54 @@ function computeGridSummary(zones: ErcotZoneLoad[]): ErcotGridSummary {
 }
 
 /**
- * Fetch all ERCOT grid data with TTL caching, serialized calls, and retry logic.
+ * Internal fetch implementation for grid data.
+ * Called via singleFlight to prevent stampede.
+ */
+async function fetchLiveErcotDataInternal(): Promise<ErcotCacheData> {
+  const actualLoad = await executeWithRetry({
+    execute: () => fetchActualLoadByWeatherZone(),
+    description: 'actual load by weather zone',
+  });
+  
+  await sleep(STAGGER_DELAY_MS);
+  
+  const loadForecast = await executeWithRetry({
+    execute: () => fetchLoadForecastByWeatherZone(),
+    description: 'load forecast by weather zone',
+  });
+  
+  await sleep(STAGGER_DELAY_MS);
+  
+  const windData = await executeWithRetry({
+    execute: () => fetchWindActualAndForecast(),
+    description: 'wind actual and forecast',
+  });
+  
+  await sleep(STAGGER_DELAY_MS);
+  
+  const solarData = await executeWithRetry({
+    execute: () => fetchSolarActualAndForecast(),
+    description: 'solar actual and forecast',
+  });
+  
+  if (!actualLoad.length && !loadForecast.length) {
+    throw new Error('No load data available from ERCOT API');
+  }
+  
+  return buildErcotCacheData(actualLoad, loadForecast, windData, solarData);
+}
+
+/**
+ * Fetch all ERCOT grid data with TTL caching, circuit breaker, single-flight, and retry logic.
  * 
  * TTL: 15 minutes (GRID_DATA_TTL_MS)
- * Fallback chain: memory cache → SQLite last-good → throw
+ * Fallback chain: memory cache → last-good → throw
+ * 
+ * Circuit breaker: On 429, opens breaker and returns last-good or throws RateLimitedError.
+ * Single-flight: Prevents parallel stampede on one instance.
  * 
  * If TTL hasn't expired, returns cached data without hitting network.
- * Saves successful live results to SQLite for fallback.
+ * Saves successful live results to last-good cache.
  */
 export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
   // Check memory cache first - don't hit network if TTL valid
@@ -644,97 +925,60 @@ export async function fetchLiveErcotData(): Promise<ErcotCacheData> {
     };
   }
   
-  // Check SQLite cache - return if TTL would still be valid
-  const db = getErcotDb();
-  if (db) {
-    try {
-      const sqliteCached = db.loadLastGoodGrid();
-      if (sqliteCached) {
-        const cachedTime = new Date(sqliteCached.cachedAt).getTime();
-        if (Date.now() - cachedTime < GRID_DATA_TTL_MS) {
-          // Populate memory cache from SQLite
-          gridDataCache = createCacheEntry(sqliteCached, GRID_DATA_TTL_MS - (Date.now() - cachedTime));
-          return {
-            ...sqliteCached,
-            dataSource: 'cached' as const,
-            cacheLabel: 'SQLITE',
-          };
-        }
-      }
-    } catch (dbError) {
-      console.warn('Failed to check SQLite cache for grid data:', dbError);
+  // Check circuit breaker - if open, return last-good or throw
+  if (isCircuitBreakerOpen()) {
+    const remainingMs = getCircuitBreakerRemainingMs();
+    const lastGood = await loadLastGoodGrid();
+    if (lastGood) {
+      console.log(`Circuit breaker open (${Math.ceil(remainingMs / 1000)}s remaining), returning last-good grid data`);
+      return lastGood;
     }
+    throw new RateLimitedError(remainingMs);
   }
   
-  // TTL expired or no cache - fetch live data
-  try {
-    const actualLoad = await executeWithRetry({
-      execute: () => fetchActualLoadByWeatherZone(),
-      description: 'actual load by weather zone',
-    });
-    
-    await sleep(STAGGER_DELAY_MS);
-    
-    const loadForecast = await executeWithRetry({
-      execute: () => fetchLoadForecastByWeatherZone(),
-      description: 'load forecast by weather zone',
-    });
-    
-    await sleep(STAGGER_DELAY_MS);
-    
-    const windData = await executeWithRetry({
-      execute: () => fetchWindActualAndForecast(),
-      description: 'wind actual and forecast',
-    });
-    
-    await sleep(STAGGER_DELAY_MS);
-    
-    const solarData = await executeWithRetry({
-      execute: () => fetchSolarActualAndForecast(),
-      description: 'solar actual and forecast',
-    });
-    
-    if (!actualLoad.length && !loadForecast.length) {
-      throw new Error('No load data available from ERCOT API');
+  // Use single-flight to prevent stampede
+  return singleFlight('grid', async () => {
+    // Re-check memory cache (another request may have populated it)
+    if (isCacheValid(gridDataCache)) {
+      return {
+        ...gridDataCache.data,
+        dataSource: 'cached' as const,
+        cacheLabel: 'MEMORY',
+      };
     }
     
-    const result = buildErcotCacheData(actualLoad, loadForecast, windData, solarData);
-    
-    // Update memory cache
-    gridDataCache = createCacheEntry(result, GRID_DATA_TTL_MS);
-    
-    // Persist to SQLite (write-only-on-success)
-    if (db) {
-      try {
-        db.saveLastGoodGrid(result);
-      } catch (dbError) {
-        console.warn('Failed to save ERCOT data to SQLite cache:', dbError);
-      }
-    }
-    
-    return result;
-  } catch (error) {
-    console.error('ERCOT live fetch failed after retries:', error);
-    
-    // Final fallback: SQLite last-good (even if stale)
-    if (db) {
-      try {
-        const cached = db.loadLastGoodGrid();
-        if (cached) {
-          console.log('Falling back to last-good ERCOT grid data from SQLite (stale)');
-          return {
-            ...cached,
-            dataSource: 'cached' as const,
-            cacheLabel: 'SQLITE-STALE',
-          };
+    try {
+      const result = await fetchLiveErcotDataInternal();
+      
+      // Update memory cache
+      gridDataCache = createCacheEntry(result, GRID_DATA_TTL_MS);
+      
+      // Save to last-good cache (write-only-on-success)
+      await saveLastGoodGrid(result);
+      
+      return result;
+    } catch (error) {
+      // On RateLimitedError, return last-good if available
+      if (error instanceof RateLimitedError) {
+        const lastGood = await loadLastGoodGrid();
+        if (lastGood) {
+          console.log('Rate limited, returning last-good grid data');
+          return lastGood;
         }
-      } catch (dbError) {
-        console.warn('Failed to load ERCOT data from SQLite cache:', dbError);
       }
+      
+      console.error('ERCOT live fetch failed after retries:', error);
+      
+      // Final fallback: last-good (even if stale)
+      const lastGood = await loadLastGoodGrid();
+      if (lastGood) {
+        console.log('Falling back to last-good ERCOT grid data');
+        return lastGood;
+      }
+      
+      throw error;
     }
-    
-    throw error;
-  }
+  });
 }
 
 function buildErcotCacheData(
@@ -851,30 +1095,33 @@ export function clearTokenCache(): void {
   tokenCache = null;
 }
 
-export function clearErcotDbCache(): void {
-  if (ercotDb) {
-    ercotDb.close();
-    ercotDb = null;
-  }
-  ercotDbInitFailed = false;
-}
-
 /**
  * Clear all memory caches. Useful for testing or forcing fresh fetches.
+ * Note: This clears memory-level caches only; durable (unstable_cache) entries
+ * persist until revalidation. Use revalidateTag('ercot-cache') to clear those.
  */
 export function clearMemoryCaches(): void {
   gridDataCache = null;
   rtSppCache.clear();
   damSppCache.clear();
+  memoryLastGoodGrid = null;
+  memoryLastGoodPrices.clear();
 }
 
 /**
- * Clear all caches (memory + SQLite state).
+ * Reset circuit breaker state. Useful for testing.
+ */
+export function resetCircuitBreaker(): void {
+  circuitBreakerOpenUntil = 0;
+}
+
+/**
+ * Clear all caches and reset circuit breaker.
  */
 export function clearAllCaches(): void {
   clearMemoryCaches();
-  clearErcotDbCache();
   clearTokenCache();
+  resetCircuitBreaker();
 }
 
 // Export TTL constants for documentation and testing
@@ -891,9 +1138,6 @@ export const TTL_CONSTANTS = {
 // DAM SPP: /np4-190-cd/dam_stlmnt_pnt_prices (hourly day-ahead)
 // Default settlement point: HB_HUBAVG
 // ============================================================================
-
-import type { SppPrice, PriceCacheData, ArbEdge } from '@fleetfail/engine';
-import { calculateArbWindows, DEFAULT_SETTLEMENT_POINT } from '@fleetfail/engine';
 
 interface RtSppApiRecord {
   deliveryDate?: string;
@@ -995,14 +1239,74 @@ export async function fetchSppDayAhead(
 }
 
 /**
+ * Internal fetch implementation for price data.
+ * Called via singleFlight to prevent stampede.
+ */
+async function fetchLiveErcotPricesInternal(
+  settlementPoint: string
+): Promise<{ rtPrices: SppPrice[]; damPrices: SppPrice[]; fetchedLive: boolean }> {
+  let rtPrices: SppPrice[] | null = null;
+  let damPrices: SppPrice[] | null = null;
+  let rtFromCache = false;
+  let damFromCache = false;
+  
+  // Check memory caches
+  const rtCacheEntry = rtSppCache.get(settlementPoint);
+  if (isCacheValid(rtCacheEntry)) {
+    rtPrices = rtCacheEntry.data;
+    rtFromCache = true;
+  }
+  
+  const damCacheEntry = damSppCache.get(settlementPoint);
+  if (isCacheValid(damCacheEntry)) {
+    damPrices = damCacheEntry.data;
+    damFromCache = true;
+  }
+  
+  // Fetch only what we need
+  let fetchedLive = false;
+  
+  if (!rtPrices) {
+    rtPrices = await executeWithRetry({
+      execute: () => fetchSppRealTime(settlementPoint),
+      description: 'RT SPP prices',
+    });
+    rtSppCache.set(settlementPoint, createCacheEntry(rtPrices, RT_SPP_TTL_MS));
+    fetchedLive = true;
+  }
+  
+  if (!damPrices && fetchedLive) {
+    await sleep(STAGGER_DELAY_MS);
+  }
+  
+  if (!damPrices) {
+    damPrices = await executeWithRetry({
+      execute: () => fetchSppDayAhead(settlementPoint),
+      description: 'DAM SPP prices',
+    });
+    damSppCache.set(settlementPoint, createCacheEntry(damPrices, DAM_SPP_TTL_MS));
+    fetchedLive = true;
+  }
+  
+  return {
+    rtPrices: rtPrices || [],
+    damPrices: damPrices || [],
+    fetchedLive: fetchedLive && !rtFromCache && !damFromCache,
+  };
+}
+
+/**
  * Fetch live ERCOT price data (RT + DAM) and calculate arb windows.
  * 
  * TTLs:
  * - RT SPP: 15 minutes (RT_SPP_TTL_MS) - real-time 15-min intervals
  * - DAM SPP: 24 hours (DAM_SPP_TTL_MS) - once per calendar day
  * 
+ * Circuit breaker: On 429, opens breaker and returns last-good or throws RateLimitedError.
+ * Single-flight: Prevents parallel stampede on one instance.
+ * 
  * Uses separate caches for RT and DAM to avoid re-fetching DAM unnecessarily.
- * Fallback chain per component: memory cache → SQLite last-good → throw
+ * Fallback chain per component: memory cache → last-good → throw
  * 
  * @param settlementPoint - Settlement point (default: HB_HUBAVG)
  * @returns PriceCacheData with live data and calculated arb windows
@@ -1010,130 +1314,72 @@ export async function fetchSppDayAhead(
 export async function fetchLiveErcotPrices(
   settlementPoint: string = DEFAULT_SETTLEMENT_POINT
 ): Promise<PriceCacheData> {
-  const db = getErcotDb();
-  let rtPrices: SppPrice[] | null = null;
-  let damPrices: SppPrice[] | null = null;
-  let rtFromCache = false;
-  let damFromCache = false;
-  
-  // -------------------------------------------------------------------------
-  // RT SPP: Check cache (15 min TTL)
-  // -------------------------------------------------------------------------
+  // Check if we have valid memory caches for both RT and DAM
   const rtCacheEntry = rtSppCache.get(settlementPoint);
-  if (isCacheValid(rtCacheEntry)) {
-    rtPrices = rtCacheEntry.data;
-    rtFromCache = true;
-  }
-  
-  // -------------------------------------------------------------------------
-  // DAM SPP: Check cache (24h TTL)
-  // -------------------------------------------------------------------------
   const damCacheEntry = damSppCache.get(settlementPoint);
-  if (isCacheValid(damCacheEntry)) {
-    damPrices = damCacheEntry.data;
-    damFromCache = true;
+  if (isCacheValid(rtCacheEntry) && isCacheValid(damCacheEntry)) {
+    return buildPriceCacheData(rtCacheEntry.data, damCacheEntry.data, settlementPoint, 'cached');
   }
   
-  // -------------------------------------------------------------------------
-  // Check SQLite for any missing components still within TTL
-  // -------------------------------------------------------------------------
-  if (db && (!rtPrices || !damPrices)) {
+  // Check circuit breaker - if open, return last-good or throw
+  if (isCircuitBreakerOpen()) {
+    const remainingMs = getCircuitBreakerRemainingMs();
+    const lastGood = await loadLastGoodPrices(settlementPoint);
+    if (lastGood) {
+      console.log(`Circuit breaker open (${Math.ceil(remainingMs / 1000)}s remaining), returning last-good price data`);
+      return lastGood;
+    }
+    throw new RateLimitedError(remainingMs);
+  }
+  
+  // Use single-flight to prevent stampede
+  const flightKey: FlightKey = `prices:${settlementPoint}`;
+  return singleFlight(flightKey, async () => {
+    // Re-check memory caches (another request may have populated them)
+    const rtCache = rtSppCache.get(settlementPoint);
+    const damCache = damSppCache.get(settlementPoint);
+    if (isCacheValid(rtCache) && isCacheValid(damCache)) {
+      return buildPriceCacheData(rtCache.data, damCache.data, settlementPoint, 'cached');
+    }
+    
     try {
-      const sqliteCached = db.loadLastGoodPrices(settlementPoint);
-      if (sqliteCached) {
-        const cachedTime = new Date(sqliteCached.cachedAt).getTime();
-        const age = Date.now() - cachedTime;
-        
-        // Use SQLite RT prices if within TTL
-        if (!rtPrices && age < RT_SPP_TTL_MS && sqliteCached.rtPrices?.length) {
-          rtPrices = sqliteCached.rtPrices;
-          rtSppCache.set(settlementPoint, createCacheEntry(rtPrices, RT_SPP_TTL_MS - age));
-          rtFromCache = true;
-        }
-        
-        // Use SQLite DAM prices if within TTL
-        if (!damPrices && age < DAM_SPP_TTL_MS && sqliteCached.damPrices?.length) {
-          damPrices = sqliteCached.damPrices;
-          damSppCache.set(settlementPoint, createCacheEntry(damPrices, DAM_SPP_TTL_MS - age));
-          damFromCache = true;
+      const { rtPrices, damPrices, fetchedLive } = await fetchLiveErcotPricesInternal(settlementPoint);
+      
+      const result = buildPriceCacheData(
+        rtPrices,
+        damPrices,
+        settlementPoint,
+        fetchedLive ? 'live' : 'cached'
+      );
+      
+      // Save to last-good cache (write-only-on-success)
+      if (fetchedLive) {
+        await saveLastGoodPrices(result);
+      }
+      
+      return result;
+    } catch (error) {
+      // On RateLimitedError, return last-good if available
+      if (error instanceof RateLimitedError) {
+        const lastGood = await loadLastGoodPrices(settlementPoint);
+        if (lastGood) {
+          console.log('Rate limited, returning last-good price data');
+          return lastGood;
         }
       }
-    } catch (dbError) {
-      console.warn('Failed to check SQLite cache for price data:', dbError);
-    }
-  }
-  
-  // -------------------------------------------------------------------------
-  // Fetch only what we need (avoiding thundering herd)
-  // -------------------------------------------------------------------------
-  let fetchedLive = false;
-  
-  try {
-    if (!rtPrices) {
-      rtPrices = await executeWithRetry({
-        execute: () => fetchSppRealTime(settlementPoint),
-        description: 'RT SPP prices',
-      });
-      rtSppCache.set(settlementPoint, createCacheEntry(rtPrices, RT_SPP_TTL_MS));
-      fetchedLive = true;
-    }
-    
-    // Stagger between RT and DAM if we need both
-    if (!damPrices && fetchedLive) {
-      await sleep(STAGGER_DELAY_MS);
-    }
-    
-    if (!damPrices) {
-      damPrices = await executeWithRetry({
-        execute: () => fetchSppDayAhead(settlementPoint),
-        description: 'DAM SPP prices',
-      });
-      damSppCache.set(settlementPoint, createCacheEntry(damPrices, DAM_SPP_TTL_MS));
-      fetchedLive = true;
-    }
-  } catch (error) {
-    console.error('ERCOT price fetch failed after retries:', error);
-    
-    // Final fallback: SQLite last-good (even if stale)
-    if (db && (!rtPrices || !damPrices)) {
-      try {
-        const cached = db.loadLastGoodPrices(settlementPoint);
-        if (cached) {
-          console.log('Falling back to last-good ERCOT price data from SQLite (stale)');
-          if (!rtPrices && cached.rtPrices?.length) rtPrices = cached.rtPrices;
-          if (!damPrices && cached.damPrices?.length) damPrices = cached.damPrices;
-        }
-      } catch (dbError) {
-        console.warn('Failed to load ERCOT price data from SQLite cache:', dbError);
+      
+      console.error('ERCOT price fetch failed after retries:', error);
+      
+      // Final fallback: last-good (even if stale)
+      const lastGood = await loadLastGoodPrices(settlementPoint);
+      if (lastGood) {
+        console.log('Falling back to last-good ERCOT price data');
+        return lastGood;
       }
-    }
-    
-    // If we still don't have data, throw
-    if (!rtPrices && !damPrices) {
+      
       throw error;
     }
-  }
-  
-  // -------------------------------------------------------------------------
-  // Build result with honesty about data source
-  // -------------------------------------------------------------------------
-  const result = buildPriceCacheData(
-    rtPrices || [],
-    damPrices || [],
-    settlementPoint,
-    fetchedLive && !rtFromCache && !damFromCache ? 'live' : 'cached'
-  );
-  
-  // Persist to SQLite only if we fetched fresh live data
-  if (fetchedLive && db) {
-    try {
-      db.saveLastGoodPrices(result);
-    } catch (dbError) {
-      console.warn('Failed to save ERCOT price data to SQLite cache:', dbError);
-    }
-  }
-  
-  return result;
+  });
 }
 
 function buildPriceCacheData(

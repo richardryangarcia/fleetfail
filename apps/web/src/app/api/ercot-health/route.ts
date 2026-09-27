@@ -4,16 +4,21 @@
  * Diagnostic endpoint to verify Vercel Production picks up ERCOT env vars.
  * Returns JSON with credential presence checks and optional live API probe results.
  *
+ * USAGE:
+ * - GET /api/ercot-health         - Credentials check only (no live probe, no quota burn)
+ * - GET /api/ercot-health?probe=1 - Full live probe (burns ERCOT API quota)
+ *
  * SECURITY:
  * - NEVER returns or logs actual env values, secrets, Bearer tokens, or subscription keys
  * - Error messages are sanitized to strip sensitive data
  */
 
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import {
   fetchLiveErcotData,
   fetchLiveErcotPrices,
   hasErcotCredentials,
+  RateLimitedError,
 } from '@/lib/ercot-live';
 
 export const dynamic = 'force-dynamic';
@@ -26,6 +31,8 @@ interface HealthResponse {
     password: boolean;
     subscriptionKey: boolean;
   };
+  probeRequested: boolean;
+  circuitBreakerNote?: string;
   grid: {
     attempted: boolean;
     dataSource?: string;
@@ -98,7 +105,9 @@ function getSafeErrorInfo(error: unknown): { name: string; message: string } {
   };
 }
 
-export async function GET(): Promise<NextResponse<HealthResponse>> {
+export async function GET(request: NextRequest): Promise<NextResponse<HealthResponse>> {
+  const { searchParams } = new URL(request.url);
+  const probeRequested = searchParams.get('probe') === '1';
   const hasCredentials = hasErcotCredentials();
 
   const response: HealthResponse = {
@@ -108,6 +117,7 @@ export async function GET(): Promise<NextResponse<HealthResponse>> {
       password: !!process.env.ERCOT_API_PASSWORD,
       subscriptionKey: !!process.env.ERCOT_PUBLIC_API_SUBSCRIPTION_KEY,
     },
+    probeRequested,
     grid: {
       attempted: false,
     },
@@ -116,10 +126,18 @@ export async function GET(): Promise<NextResponse<HealthResponse>> {
     },
   };
 
+  // If no credentials, return early
   if (!hasCredentials) {
     return NextResponse.json(response);
   }
 
+  // If probe not requested, return credentials-only response
+  if (!probeRequested) {
+    response.circuitBreakerNote = 'Add ?probe=1 to perform live ERCOT API probe (burns quota)';
+    return NextResponse.json(response);
+  }
+
+  // Perform live probe
   response.grid.attempted = true;
   try {
     const gridData = await fetchLiveErcotData();
@@ -127,9 +145,15 @@ export async function GET(): Promise<NextResponse<HealthResponse>> {
     response.grid.snapshotId = gridData.snapshotId;
     response.grid.cacheLabel = gridData.cacheLabel;
   } catch (error) {
-    const errInfo = getSafeErrorInfo(error);
-    response.grid.errorName = errInfo.name;
-    response.grid.errorMessageSafe = errInfo.message;
+    if (error instanceof RateLimitedError) {
+      response.grid.errorName = 'RateLimitedError';
+      response.grid.errorMessageSafe = error.message;
+      response.circuitBreakerNote = `Circuit breaker open, retry in ${Math.ceil(error.retryAfterMs / 1000)}s`;
+    } else {
+      const errInfo = getSafeErrorInfo(error);
+      response.grid.errorName = errInfo.name;
+      response.grid.errorMessageSafe = errInfo.message;
+    }
   }
 
   response.prices.attempted = true;
@@ -139,9 +163,17 @@ export async function GET(): Promise<NextResponse<HealthResponse>> {
     response.prices.snapshotId = priceData.snapshotId;
     response.prices.currentPriceMwh = priceData.currentPriceMwh;
   } catch (error) {
-    const errInfo = getSafeErrorInfo(error);
-    response.prices.errorName = errInfo.name;
-    response.prices.errorMessageSafe = errInfo.message;
+    if (error instanceof RateLimitedError) {
+      response.prices.errorName = 'RateLimitedError';
+      response.prices.errorMessageSafe = error.message;
+      if (!response.circuitBreakerNote) {
+        response.circuitBreakerNote = `Circuit breaker open, retry in ${Math.ceil(error.retryAfterMs / 1000)}s`;
+      }
+    } else {
+      const errInfo = getSafeErrorInfo(error);
+      response.prices.errorName = errInfo.name;
+      response.prices.errorMessageSafe = errInfo.message;
+    }
   }
 
   return NextResponse.json(response);
