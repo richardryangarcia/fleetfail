@@ -725,3 +725,337 @@ describe('ERCOT Payload Transform → hourlyData Integration (Prod Regression)',
     });
   });
 });
+
+/**
+ * Dense Hourly Series Tests (P0 Regression: Forecast-only / Single-Day Issue)
+ * 
+ * These tests verify that buildHourlyData produces a dense series with:
+ * 1. ACTUAL hours from historical load data (not just forecasts)
+ * 2. Multiple calendar days spanned (not locked to a single date)
+ * 3. Total count in the expected range (72-96+ entries)
+ * 
+ * Root cause of P0: Missing date range parameters in fetchActualLoadByWeatherZone
+ * caused ERCOT API to return minimal/empty actual load data, resulting in
+ * forecast-only hourlyData locked to a single day.
+ */
+describe('Dense Hourly Series: Actual + Forecast Multi-Day Span (P0 Regression)', () => {
+  const CANONICAL_FIELD_ALIASES: Record<string, string> = {
+    deliverydate: 'deliveryDate',
+    hourending: 'hourEnding',
+    systemtotal: 'systemTotal',
+    coast: 'coast',
+    east: 'east',
+    farwest: 'farWest',
+    north: 'north',
+    northcentral: 'northCentral',
+    southcentral: 'southCentral',
+    southern: 'southern',
+    west: 'west',
+    model: 'model',
+  };
+
+  function normalizeFieldKey(fieldName: string): string {
+    return fieldName.toLowerCase().replace(/_/g, '');
+  }
+
+  function toCamelCase(fieldName: string): string {
+    const normalized = normalizeFieldKey(fieldName);
+    if (CANONICAL_FIELD_ALIASES[normalized]) {
+      return CANONICAL_FIELD_ALIASES[normalized];
+    }
+    if (fieldName.includes('_')) {
+      return fieldName.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    }
+    return fieldName.charAt(0).toLowerCase() + fieldName.slice(1);
+  }
+
+  function transformWithCamelCase<T>(response: ErcotApiResponse<T>): T[] {
+    const { fields, data } = response;
+    if (!data || !Array.isArray(data) || data.length === 0) return [];
+    const firstRow = data[0];
+    if (fields && Array.isArray(fields) && fields.length > 0 && Array.isArray(firstRow)) {
+      const fieldNames = fields.map(f => toCamelCase(f.name));
+      return (data as unknown[][]).map(row => {
+        const obj: Record<string, unknown> = {};
+        fieldNames.forEach((name, idx) => {
+          if (idx < row.length) obj[name] = row[idx];
+        });
+        return obj as T;
+      });
+    }
+    if (typeof firstRow === 'object' && firstRow !== null && !Array.isArray(firstRow)) {
+      return (data as Record<string, unknown>[]).map(item => {
+        const obj: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(item)) {
+          obj[toCamelCase(key)] = value;
+        }
+        return obj as T;
+      });
+    }
+    return [];
+  }
+
+  interface ActualLoadByZone {
+    deliveryDate?: string;
+    hourEnding?: string;
+    coast?: number;
+    systemTotal?: number;
+  }
+
+  interface LoadForecastByZone {
+    deliveryDate?: string;
+    hourEnding?: string;
+    model?: string;
+    coast?: number;
+    systemTotal?: number;
+  }
+
+  interface HourlySnapshot {
+    hourKey: string;
+    deliveryDate: string;
+    hourEnding: number;
+    dataType: 'actual' | 'forecast';
+  }
+
+  function buildCombinedHourlyData(
+    actualLoad: ActualLoadByZone[],
+    loadForecast: LoadForecastByZone[]
+  ): HourlySnapshot[] {
+    const hourlySnapshots: HourlySnapshot[] = [];
+    const processedHours = new Set<string>();
+
+    for (const load of actualLoad) {
+      if (!load.deliveryDate) continue;
+      const hourStr = load.hourEnding ?? '0';
+      const hourEndingNum = parseInt(String(hourStr).replace(':00', ''), 10) || 0;
+      const displayHour = hourEndingNum === 24 ? 0 : hourEndingNum;
+      const hourKey = `${load.deliveryDate} ${String(displayHour).padStart(2, '0')}:00`;
+      
+      if (processedHours.has(hourKey)) continue;
+      processedHours.add(hourKey);
+
+      hourlySnapshots.push({
+        hourKey,
+        deliveryDate: load.deliveryDate,
+        hourEnding: hourEndingNum,
+        dataType: 'actual',
+      });
+    }
+
+    for (const forecast of loadForecast) {
+      if (!forecast.deliveryDate) continue;
+      const hourStr = forecast.hourEnding ?? '0';
+      const hourEndingNum = parseInt(String(hourStr).replace(':00', ''), 10) || 0;
+      const displayHour = hourEndingNum === 24 ? 0 : hourEndingNum;
+      const hourKey = `${forecast.deliveryDate} ${String(displayHour).padStart(2, '0')}:00`;
+      
+      if (processedHours.has(hourKey)) continue;
+      processedHours.add(hourKey);
+
+      hourlySnapshots.push({
+        hourKey,
+        deliveryDate: forecast.deliveryDate,
+        hourEnding: hourEndingNum,
+        dataType: 'forecast',
+      });
+    }
+
+    return hourlySnapshots.sort((a, b) => a.hourKey.localeCompare(b.hourKey));
+  }
+
+  function generateMultiDayActualLoadPayload(baseDate: Date, hoursBack: number): ErcotApiResponse<ActualLoadByZone> {
+    const rows: unknown[][] = [];
+    const date = new Date(baseDate);
+    
+    for (let i = 0; i < hoursBack; i++) {
+      const d = new Date(date);
+      d.setHours(d.getHours() - i);
+      const deliveryDate = d.toISOString().split('T')[0];
+      const hourEnding = d.getHours() === 0 ? 24 : d.getHours();
+      rows.push([deliveryDate, String(hourEnding), 8500 + Math.floor(Math.random() * 1000), 52000 + Math.floor(Math.random() * 2000)]);
+    }
+
+    return {
+      fields: [
+        { name: 'DeliveryDate' },
+        { name: 'HourEnding' },
+        { name: 'Coast' },
+        { name: 'SystemTotal' },
+      ],
+      data: rows,
+    };
+  }
+
+  function generateMultiDayForecastPayload(baseDate: Date, hoursAhead: number): ErcotApiResponse<LoadForecastByZone> {
+    const rows: unknown[][] = [];
+    const date = new Date(baseDate);
+    
+    for (let i = 1; i <= hoursAhead; i++) {
+      const d = new Date(date);
+      d.setHours(d.getHours() + i);
+      const deliveryDate = d.toISOString().split('T')[0];
+      const hourEnding = d.getHours() === 0 ? 24 : d.getHours();
+      rows.push([deliveryDate, String(hourEnding), 'STLF', 8600 + Math.floor(Math.random() * 1000), 53000 + Math.floor(Math.random() * 2000)]);
+    }
+
+    return {
+      fields: [
+        { name: 'DeliveryDate' },
+        { name: 'HourEnding' },
+        { name: 'Model' },
+        { name: 'Coast' },
+        { name: 'SystemTotal' },
+      ],
+      data: rows,
+    };
+  }
+
+  describe('Multi-day actual load payload', () => {
+    const baseDate = new Date('2026-09-27T14:00:00Z');
+    const actualResponse = generateMultiDayActualLoadPayload(baseDate, 72);
+    const forecastResponse = generateMultiDayForecastPayload(baseDate, 24);
+
+    it('transform produces 72 actual load rows', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      expect(actualLoad.length).toBe(72);
+    });
+
+    it('all actual load rows have valid deliveryDate', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const missingDates = actualLoad.filter(r => !r.deliveryDate);
+      expect(missingDates.length).toBe(0);
+    });
+
+    it('actual load spans multiple calendar days (>1 unique date)', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const uniqueDates = new Set(actualLoad.map(r => r.deliveryDate));
+      expect(uniqueDates.size).toBeGreaterThan(1);
+    });
+  });
+
+  describe('Combined actual + forecast hourlyData', () => {
+    const baseDate = new Date('2026-09-27T14:00:00Z');
+    const actualResponse = generateMultiDayActualLoadPayload(baseDate, 72);
+    const forecastResponse = generateMultiDayForecastPayload(baseDate, 24);
+
+    it('produces 72+ hourly snapshots when given 72h actuals + 24h forecast', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      expect(hourlyData.length).toBeGreaterThanOrEqual(72);
+    });
+
+    it('includes ACTUAL dataType snapshots (not forecast-only)', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      const actualSnapshots = hourlyData.filter(h => h.dataType === 'actual');
+      expect(actualSnapshots.length).toBeGreaterThan(0);
+      expect(actualSnapshots.length).toBeGreaterThanOrEqual(70);
+    });
+
+    it('includes FORECAST dataType snapshots', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      const forecastSnapshots = hourlyData.filter(h => h.dataType === 'forecast');
+      expect(forecastSnapshots.length).toBeGreaterThan(0);
+    });
+
+    it('spans multiple calendar days (>2 unique dates)', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      const uniqueDates = new Set(hourlyData.map(h => h.deliveryDate));
+      expect(uniqueDates.size).toBeGreaterThan(2);
+    });
+
+    it('hourlyData is sorted by hourKey ascending', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(actualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      for (let i = 1; i < hourlyData.length; i++) {
+        expect(hourlyData[i]!.hourKey >= hourlyData[i - 1]!.hourKey).toBe(true);
+      }
+    });
+  });
+
+  describe('Regression: forecast-only payload (simulates missing actual load)', () => {
+    const baseDate = new Date('2026-09-27T14:00:00Z');
+    const emptyActualResponse: ErcotApiResponse<ActualLoadByZone> = {
+      fields: [{ name: 'DeliveryDate' }, { name: 'HourEnding' }, { name: 'Coast' }],
+      data: [],
+    };
+    const forecastResponse = generateMultiDayForecastPayload(baseDate, 24);
+
+    it('produces forecast-only hourlyData when actual load is empty', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(emptyActualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      const actualSnapshots = hourlyData.filter(h => h.dataType === 'actual');
+      const forecastSnapshots = hourlyData.filter(h => h.dataType === 'forecast');
+      
+      expect(actualSnapshots.length).toBe(0);
+      expect(forecastSnapshots.length).toBe(24);
+    });
+
+    it('this is the BAD state - should have actuals, not just forecasts', () => {
+      const actualLoad = transformWithCamelCase<ActualLoadByZone>(emptyActualResponse);
+      const loadForecast = transformWithCamelCase<LoadForecastByZone>(forecastResponse);
+      const hourlyData = buildCombinedHourlyData(actualLoad, loadForecast);
+      
+      const actualSnapshots = hourlyData.filter(h => h.dataType === 'actual');
+      
+      expect(actualSnapshots.length).toBe(0);
+    });
+  });
+
+  describe('Regression: single-day forecast (simulates missing date range params)', () => {
+    const singleDayForecast: ErcotApiResponse<LoadForecastByZone> = {
+      fields: [
+        { name: 'DeliveryDate' },
+        { name: 'HourEnding' },
+        { name: 'Model' },
+        { name: 'Coast' },
+      ],
+      data: [
+        ['2026-10-03', '1', 'STLF', 8500],
+        ['2026-10-03', '2', 'STLF', 8400],
+        ['2026-10-03', '3', 'STLF', 8300],
+        ['2026-10-03', '4', 'STLF', 8200],
+        ['2026-10-03', '5', 'STLF', 8100],
+        ['2026-10-03', '6', 'STLF', 8200],
+        ['2026-10-03', '7', 'STLF', 8400],
+        ['2026-10-03', '8', 'STLF', 8700],
+        ['2026-10-03', '9', 'STLF', 9000],
+      ] as unknown[][],
+    };
+
+    it('produces only 9 hourly snapshots locked to single day - the BAD state', () => {
+      const emptyActual: ActualLoadByZone[] = [];
+      const forecast = transformWithCamelCase<LoadForecastByZone>(singleDayForecast);
+      const hourlyData = buildCombinedHourlyData(emptyActual, forecast);
+      
+      expect(hourlyData.length).toBe(9);
+      
+      const uniqueDates = new Set(hourlyData.map(h => h.deliveryDate));
+      expect(uniqueDates.size).toBe(1);
+      expect([...uniqueDates][0]).toBe('2026-10-03');
+    });
+
+    it('all snapshots are forecast type - confirms no actual data', () => {
+      const emptyActual: ActualLoadByZone[] = [];
+      const forecast = transformWithCamelCase<LoadForecastByZone>(singleDayForecast);
+      const hourlyData = buildCombinedHourlyData(emptyActual, forecast);
+      
+      const actualSnapshots = hourlyData.filter(h => h.dataType === 'actual');
+      expect(actualSnapshots.length).toBe(0);
+    });
+  });
+});

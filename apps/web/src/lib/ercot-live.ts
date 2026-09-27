@@ -758,13 +758,28 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 4);
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = now.toISOString().split('T')[0];
+  
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
       size: 96,
+      deliveryDateFrom,
+      deliveryDateTo,
     },
   });
   
   const data = transformErcotResponse<ActualLoadByZone>(response.data);
+  
+  if (data.length === 0) {
+    console.warn(`ERCOT actual load returned 0 rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  } else {
+    console.log(`ERCOT actual load returned ${data.length} rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  }
+  
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -772,13 +787,28 @@ export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZo
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 3);
+  const deliveryDateFrom = now.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
   const response = await client.get<ErcotApiResponse<LoadForecastByZone>>('/np3-565-cd/lf_by_model_weather_zone', {
     params: {
       size: 72,
+      deliveryDateFrom,
+      deliveryDateTo,
     },
   });
   
   const data = transformErcotResponse<LoadForecastByZone>(response.data);
+  
+  if (data.length === 0) {
+    console.warn(`ERCOT load forecast returned 0 rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  } else {
+    console.log(`ERCOT load forecast returned ${data.length} rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  }
+  
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -786,9 +816,19 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 4);
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 3);
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
   const response = await client.get<ErcotApiResponse<WindActualForecast>>('/np4-742-cd/wpp_hrly_actual_fcast_geo', {
     params: {
       size: 300,
+      deliveryDateFrom,
+      deliveryDateTo,
     },
   });
   
@@ -800,6 +840,14 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 4);
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 3);
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
   const paths = [
     '/np4-745-cd/spp_hrly_actual_fcast_geo',
     '/np4-745-cd/spp_hrly_actual_fcast_ge',
@@ -810,6 +858,8 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
       const response = await client.get<ErcotApiResponse<SolarActualForecast>>(path, {
         params: {
           size: 300,
+          deliveryDateFrom,
+          deliveryDateTo,
         },
       });
       
@@ -1074,8 +1124,14 @@ function buildErcotCacheData(
   windData: WindActualForecast[],
   solarData: SolarActualForecast[]
 ): ErcotCacheData {
+  console.log(`buildErcotCacheData: actualLoad=${actualLoad.length}, loadForecast=${loadForecast.length}, wind=${windData.length}, solar=${solarData.length}`);
+  
   if (!actualLoad.length && !loadForecast.length) {
     throw new Error('No load data available from ERCOT API');
+  }
+  
+  if (!actualLoad.length && loadForecast.length > 0) {
+    console.warn('WARNING: No actual load data available - hourlyData will be forecast-only');
   }
   
   const windByHourZone = new Map<string, Map<string, number>>();
@@ -1149,6 +1205,16 @@ function buildErcotCacheData(
   }
   
   hourlySnapshots.sort((a, b) => a.hourKey.localeCompare(b.hourKey));
+  
+  const actualSnapshots = hourlySnapshots.filter(h => h.dataType === 'actual');
+  const forecastSnapshots = hourlySnapshots.filter(h => h.dataType === 'forecast');
+  const uniqueDates = [...new Set(hourlySnapshots.map(h => h.deliveryDate))].sort();
+  
+  console.log(`buildErcotCacheData: built ${hourlySnapshots.length} total snapshots (${actualSnapshots.length} actual, ${forecastSnapshots.length} forecast) spanning ${uniqueDates.length} dates: ${uniqueDates.join(', ')}`);
+  
+  if (actualSnapshots.length === 0 && hourlySnapshots.length > 0) {
+    console.warn('CRITICAL: Zero actual hours in hourlyData - slider will show forecast-only data');
+  }
   
   const captureTime = new Date();
   const currentHour = captureTime.getHours();
@@ -1544,4 +1610,358 @@ function buildPriceCacheData(
     arbEdge,
     snapshotId: `ERCOT-PRICES-${dataSource.toUpperCase()}-${captureTime.getTime()}`,
   };
+}
+
+// ============================================================================
+// BACKFILL API (7-Day Historical Fetch)
+// ============================================================================
+// Manual/demo trigger only - NOT called from normal polling.
+// Fetches ~7 days of actual load data with rate-limit-aware paging.
+// ============================================================================
+
+/** Backfill constants */
+const BACKFILL_PAGE_SIZE = 24;
+const BACKFILL_PAGE_DELAY_MS = 1500;
+const BACKFILL_429_PAUSE_MS = 30000;
+const BACKFILL_MAX_PAGES = 10;
+const BACKFILL_MAX_DURATION_MS = 55000;
+
+export interface BackfillResult {
+  ok: boolean;
+  hoursWritten: number;
+  actualHours: number;
+  forecastHours: number;
+  range: { first: string | null; last: string | null };
+  uniqueDates: string[];
+  dataSource: 'backfill' | 'partial' | 'error';
+  throttled?: boolean;
+  retryAfterSec?: number;
+  error?: string;
+  pagesCompleted: number;
+  durationMs: number;
+}
+
+interface BackfillProgress {
+  actualLoad: ActualLoadByZone[];
+  windData: WindActualForecast[];
+  solarData: SolarActualForecast[];
+  pagesCompleted: number;
+  throttled: boolean;
+  retryAfterMs: number;
+  error: string | null;
+}
+
+/**
+ * Fetch a single page of actual load data for backfill.
+ * Returns the data and whether we should continue fetching.
+ */
+async function fetchActualLoadPage(
+  client: AxiosInstance,
+  deliveryDateFrom: string,
+  deliveryDateTo: string,
+  page: number
+): Promise<{ data: ActualLoadByZone[]; hasMore: boolean }> {
+  const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
+    params: {
+      size: BACKFILL_PAGE_SIZE,
+      page: page + 1,
+      deliveryDateFrom,
+      deliveryDateTo,
+    },
+  });
+  
+  const data = transformErcotResponse<ActualLoadByZone>(response.data);
+  const totalRecords = response.data.meta?.totalRecords ?? 0;
+  const hasMore = data.length === BACKFILL_PAGE_SIZE && (page + 1) * BACKFILL_PAGE_SIZE < totalRecords;
+  
+  return { data, hasMore };
+}
+
+/**
+ * Fetch a single page of wind data for backfill.
+ */
+async function fetchWindPage(
+  client: AxiosInstance,
+  deliveryDateFrom: string,
+  deliveryDateTo: string,
+  page: number
+): Promise<{ data: WindActualForecast[]; hasMore: boolean }> {
+  const response = await client.get<ErcotApiResponse<WindActualForecast>>('/np4-742-cd/wpp_hrly_actual_fcast_geo', {
+    params: {
+      size: BACKFILL_PAGE_SIZE * 4,
+      page: page + 1,
+      deliveryDateFrom,
+      deliveryDateTo,
+    },
+  });
+  
+  const data = transformErcotResponse<WindActualForecast>(response.data);
+  const totalRecords = response.data.meta?.totalRecords ?? 0;
+  const hasMore = data.length === BACKFILL_PAGE_SIZE * 4 && (page + 1) * BACKFILL_PAGE_SIZE * 4 < totalRecords;
+  
+  return { data, hasMore };
+}
+
+/**
+ * Fetch a single page of solar data for backfill.
+ */
+async function fetchSolarPage(
+  client: AxiosInstance,
+  deliveryDateFrom: string,
+  deliveryDateTo: string,
+  page: number
+): Promise<{ data: SolarActualForecast[]; hasMore: boolean }> {
+  const paths = [
+    '/np4-745-cd/spp_hrly_actual_fcast_geo',
+    '/np4-745-cd/spp_hrly_actual_fcast_ge',
+  ];
+  
+  for (const path of paths) {
+    try {
+      const response = await client.get<ErcotApiResponse<SolarActualForecast>>(path, {
+        params: {
+          size: BACKFILL_PAGE_SIZE * 4,
+          page: page + 1,
+          deliveryDateFrom,
+          deliveryDateTo,
+        },
+      });
+      
+      const data = transformErcotResponse<SolarActualForecast>(response.data);
+      if (data.length > 0) {
+        const totalRecords = response.data.meta?.totalRecords ?? 0;
+        const hasMore = data.length === BACKFILL_PAGE_SIZE * 4 && (page + 1) * BACKFILL_PAGE_SIZE * 4 < totalRecords;
+        return { data, hasMore };
+      }
+    } catch (err: unknown) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 404) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  
+  return { data: [], hasMore: false };
+}
+
+/**
+ * Execute 7-day backfill with rate-limit awareness.
+ * 
+ * - Fetches actual load + wind + solar for date range
+ * - Paginates with delays between requests
+ * - Respects circuit breaker and 429 responses
+ * - Has max pages and max duration guards
+ * - Returns partial progress on throttle/error
+ */
+export async function executeBackfill(): Promise<BackfillResult> {
+  const startTime = Date.now();
+  
+  if (isCircuitBreakerOpen()) {
+    const remainingMs = getCircuitBreakerRemainingMs();
+    return {
+      ok: false,
+      hoursWritten: 0,
+      actualHours: 0,
+      forecastHours: 0,
+      range: { first: null, last: null },
+      uniqueDates: [],
+      dataSource: 'error',
+      throttled: true,
+      retryAfterSec: Math.ceil(remainingMs / 1000),
+      error: 'Circuit breaker open - ERCOT rate limited',
+      pagesCompleted: 0,
+      durationMs: Date.now() - startTime,
+    };
+  }
+  
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 7);
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 1);
+  
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
+  console.log(`Backfill: fetching ${deliveryDateFrom} to ${deliveryDateTo}`);
+  
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (error) {
+    return {
+      ok: false,
+      hoursWritten: 0,
+      actualHours: 0,
+      forecastHours: 0,
+      range: { first: null, last: null },
+      uniqueDates: [],
+      dataSource: 'error',
+      error: `Authentication failed: ${(error as Error).message}`,
+      pagesCompleted: 0,
+      durationMs: Date.now() - startTime,
+    };
+  }
+  
+  const client = createApiClient(token);
+  
+  const progress: BackfillProgress = {
+    actualLoad: [],
+    windData: [],
+    solarData: [],
+    pagesCompleted: 0,
+    throttled: false,
+    retryAfterMs: 0,
+    error: null,
+  };
+  
+  let hasMoreActual = true;
+  let hasMoreWind = true;
+  let hasMoreSolar = true;
+  
+  for (let page = 0; page < BACKFILL_MAX_PAGES && (hasMoreActual || hasMoreWind || hasMoreSolar); page++) {
+    if (Date.now() - startTime > BACKFILL_MAX_DURATION_MS) {
+      console.log(`Backfill: max duration reached after ${page} pages`);
+      break;
+    }
+    
+    if (isCircuitBreakerOpen()) {
+      progress.throttled = true;
+      progress.retryAfterMs = getCircuitBreakerRemainingMs();
+      console.log(`Backfill: circuit breaker opened, stopping at page ${page}`);
+      break;
+    }
+    
+    try {
+      if (hasMoreActual) {
+        const result = await fetchActualLoadPage(client, deliveryDateFrom, deliveryDateTo, page);
+        progress.actualLoad.push(...result.data);
+        hasMoreActual = result.hasMore;
+        console.log(`Backfill: page ${page + 1} actual load: ${result.data.length} rows (hasMore=${result.hasMore})`);
+        await sleep(BACKFILL_PAGE_DELAY_MS);
+      }
+      
+      if (hasMoreWind && Date.now() - startTime < BACKFILL_MAX_DURATION_MS) {
+        const result = await fetchWindPage(client, deliveryDateFrom, deliveryDateTo, page);
+        progress.windData.push(...result.data);
+        hasMoreWind = result.hasMore;
+        console.log(`Backfill: page ${page + 1} wind: ${result.data.length} rows (hasMore=${result.hasMore})`);
+        await sleep(BACKFILL_PAGE_DELAY_MS);
+      }
+      
+      if (hasMoreSolar && Date.now() - startTime < BACKFILL_MAX_DURATION_MS) {
+        const result = await fetchSolarPage(client, deliveryDateFrom, deliveryDateTo, page);
+        progress.solarData.push(...result.data);
+        hasMoreSolar = result.hasMore;
+        console.log(`Backfill: page ${page + 1} solar: ${result.data.length} rows (hasMore=${result.hasMore})`);
+        await sleep(BACKFILL_PAGE_DELAY_MS);
+      }
+      
+      progress.pagesCompleted = page + 1;
+      
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        const retryAfterMs = getRetryAfterMs(error as AxiosError);
+        openCircuitBreaker(retryAfterMs);
+        progress.throttled = true;
+        progress.retryAfterMs = retryAfterMs;
+        console.warn(`Backfill: 429 rate limited at page ${page}, pausing`);
+        break;
+      }
+      
+      progress.error = (error as Error).message;
+      console.error(`Backfill: error at page ${page}:`, error);
+      break;
+    }
+  }
+  
+  if (progress.actualLoad.length === 0) {
+    return {
+      ok: false,
+      hoursWritten: 0,
+      actualHours: 0,
+      forecastHours: 0,
+      range: { first: null, last: null },
+      uniqueDates: [],
+      dataSource: progress.throttled ? 'partial' : 'error',
+      throttled: progress.throttled,
+      retryAfterSec: progress.throttled ? Math.ceil(progress.retryAfterMs / 1000) : undefined,
+      error: progress.error ?? 'No actual load data fetched',
+      pagesCompleted: progress.pagesCompleted,
+      durationMs: Date.now() - startTime,
+    };
+  }
+  
+  let existingForecast: LoadForecastByZone[] = [];
+  try {
+    existingForecast = await fetchLoadForecastByWeatherZone();
+  } catch (err) {
+    console.warn('Backfill: failed to fetch forecast, proceeding with actuals only:', err);
+  }
+  
+  const cacheData = buildErcotCacheData(
+    progress.actualLoad,
+    existingForecast,
+    progress.windData,
+    progress.solarData
+  );
+  
+  if (!cacheData.hourlyData || cacheData.hourlyData.length === 0) {
+    return {
+      ok: false,
+      hoursWritten: 0,
+      actualHours: 0,
+      forecastHours: 0,
+      range: { first: null, last: null },
+      uniqueDates: [],
+      dataSource: 'error',
+      error: 'buildErcotCacheData produced empty hourlyData',
+      pagesCompleted: progress.pagesCompleted,
+      durationMs: Date.now() - startTime,
+    };
+  }
+  
+  const actualSnapshots = cacheData.hourlyData.filter(h => h.dataType === 'actual');
+  const forecastSnapshots = cacheData.hourlyData.filter(h => h.dataType === 'forecast');
+  const uniqueDates = [...new Set(cacheData.hourlyData.map(h => h.deliveryDate))].sort();
+  const sortedHours = [...cacheData.hourlyData].sort((a, b) => a.hourKey.localeCompare(b.hourKey));
+  
+  const backfillCacheData: ErcotCacheData = {
+    ...cacheData,
+    cacheLabel: 'Backfill (7-day)',
+    dataSource: 'cached',
+  };
+  
+  await saveLastGoodGrid(backfillCacheData);
+  
+  return {
+    ok: true,
+    hoursWritten: cacheData.hourlyData.length,
+    actualHours: actualSnapshots.length,
+    forecastHours: forecastSnapshots.length,
+    range: {
+      first: sortedHours[0]?.hourKey ?? null,
+      last: sortedHours[sortedHours.length - 1]?.hourKey ?? null,
+    },
+    uniqueDates,
+    dataSource: progress.throttled ? 'partial' : 'backfill',
+    throttled: progress.throttled,
+    retryAfterSec: progress.throttled ? Math.ceil(progress.retryAfterMs / 1000) : undefined,
+    pagesCompleted: progress.pagesCompleted,
+    durationMs: Date.now() - startTime,
+  };
+}
+
+/**
+ * Check if backfill is currently blocked by rate limits.
+ */
+export function isBackfillBlocked(): { blocked: boolean; retryAfterSec?: number } {
+  if (isCircuitBreakerOpen()) {
+    return {
+      blocked: true,
+      retryAfterSec: Math.ceil(getCircuitBreakerRemainingMs() / 1000),
+    };
+  }
+  return { blocked: false };
 }
