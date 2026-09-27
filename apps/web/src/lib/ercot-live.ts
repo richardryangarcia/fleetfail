@@ -459,6 +459,42 @@ function isRetryableError(error: unknown): error is AxiosError {
   return status === 429 || status === 503 || status === 502 || !status;
 }
 
+/**
+ * Extract detailed error information from an ERCOT API error response.
+ * This helps diagnose 400 errors caused by incorrect query parameters.
+ */
+function extractErcotErrorDetails(error: unknown): string {
+  if (!axios.isAxiosError(error)) {
+    return (error as Error).message || 'Unknown error';
+  }
+  
+  const axiosErr = error as AxiosError;
+  const status = axiosErr.response?.status;
+  const statusText = axiosErr.response?.statusText;
+  const url = axiosErr.config?.url;
+  const params = axiosErr.config?.params;
+  
+  let details = `HTTP ${status} ${statusText}`;
+  if (url) {
+    details += ` from ${url}`;
+  }
+  if (params) {
+    details += ` with params ${JSON.stringify(params)}`;
+  }
+  
+  // Try to extract ERCOT's response body for diagnosis
+  const responseData = axiosErr.response?.data;
+  if (responseData) {
+    if (typeof responseData === 'string') {
+      details += ` - Response: ${responseData.substring(0, 500)}`;
+    } else if (typeof responseData === 'object') {
+      details += ` - Response: ${JSON.stringify(responseData).substring(0, 500)}`;
+    }
+  }
+  
+  return details;
+}
+
 interface RetryableRequest<T> {
   execute: () => Promise<T>;
   description: string;
@@ -531,9 +567,13 @@ interface ErcotApiResponse<T> {
  * Maps lowercase-normalized keys to the camelCase names our interfaces expect.
  * This ensures any casing variant (DeliveryDate, DELIVERYDATE, delivery_date, deliverydate)
  * gets mapped to the correct interface field name.
+ * 
+ * NOTE: The actual load by weather zone endpoint (np6-345-cd) returns 'OperatingDay'
+ * instead of 'DeliveryDate'. We normalize this to 'deliveryDate' for consistency.
  */
 const CANONICAL_FIELD_ALIASES: Record<string, string> = {
   deliverydate: 'deliveryDate',
+  operatingday: 'deliveryDate',
   hourending: 'hourEnding',
   systemtotal: 'systemTotal',
   coast: 'coast',
@@ -758,26 +798,28 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  // The np6-345-cd endpoint uses operatingDayFrom/operatingDayTo, NOT deliveryDateFrom/deliveryDateTo
+  // This endpoint returns historical actual load data by operating day
   const now = new Date();
   const fromDate = new Date(now);
   fromDate.setDate(fromDate.getDate() - 4);
-  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
-  const deliveryDateTo = now.toISOString().split('T')[0];
+  const operatingDayFrom = fromDate.toISOString().split('T')[0];
+  const operatingDayTo = now.toISOString().split('T')[0];
   
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
       size: 96,
-      deliveryDateFrom,
-      deliveryDateTo,
+      operatingDayFrom,
+      operatingDayTo,
     },
   });
   
   const data = transformErcotResponse<ActualLoadByZone>(response.data);
   
   if (data.length === 0) {
-    console.warn(`ERCOT actual load returned 0 rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+    console.warn(`ERCOT actual load returned 0 rows for operating day range ${operatingDayFrom} to ${operatingDayTo}`);
   } else {
-    console.log(`ERCOT actual load returned ${data.length} rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+    console.log(`ERCOT actual load returned ${data.length} rows for operating day range ${operatingDayFrom} to ${operatingDayTo}`);
   }
   
   return sortByDeliveryDateHourDesc(data);
@@ -1654,19 +1696,22 @@ interface BackfillProgress {
 /**
  * Fetch a single page of actual load data for backfill.
  * Returns the data and whether we should continue fetching.
+ * 
+ * NOTE: The np6-345-cd endpoint uses operatingDayFrom/operatingDayTo parameters,
+ * not deliveryDateFrom/deliveryDateTo like other endpoints.
  */
 async function fetchActualLoadPage(
   client: AxiosInstance,
-  deliveryDateFrom: string,
-  deliveryDateTo: string,
+  operatingDayFrom: string,
+  operatingDayTo: string,
   page: number
 ): Promise<{ data: ActualLoadByZone[]; hasMore: boolean }> {
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
       size: BACKFILL_PAGE_SIZE,
       page: page + 1,
-      deliveryDateFrom,
-      deliveryDateTo,
+      operatingDayFrom,
+      operatingDayTo,
     },
   });
   
@@ -1781,10 +1826,15 @@ export async function executeBackfill(): Promise<BackfillResult> {
   const toDate = new Date(now);
   toDate.setDate(toDate.getDate() + 1);
   
+  // The actual load endpoint (np6-345-cd) uses operatingDayFrom/operatingDayTo
+  const operatingDayFrom = fromDate.toISOString().split('T')[0];
+  const operatingDayTo = toDate.toISOString().split('T')[0];
+  
+  // Wind/solar endpoints (np4-742-cd, np4-745-cd) use deliveryDateFrom/deliveryDateTo
   const deliveryDateFrom = fromDate.toISOString().split('T')[0];
   const deliveryDateTo = toDate.toISOString().split('T')[0];
   
-  console.log(`Backfill: fetching ${deliveryDateFrom} to ${deliveryDateTo}`);
+  console.log(`Backfill: fetching operatingDay ${operatingDayFrom} to ${operatingDayTo}, deliveryDate ${deliveryDateFrom} to ${deliveryDateTo}`);
   
   let token: string;
   try {
@@ -1835,7 +1885,7 @@ export async function executeBackfill(): Promise<BackfillResult> {
     
     try {
       if (hasMoreActual) {
-        const result = await fetchActualLoadPage(client, deliveryDateFrom, deliveryDateTo, page);
+        const result = await fetchActualLoadPage(client, operatingDayFrom, operatingDayTo, page);
         progress.actualLoad.push(...result.data);
         hasMoreActual = result.hasMore;
         console.log(`Backfill: page ${page + 1} actual load: ${result.data.length} rows (hasMore=${result.hasMore})`);
@@ -1870,8 +1920,10 @@ export async function executeBackfill(): Promise<BackfillResult> {
         break;
       }
       
-      progress.error = (error as Error).message;
-      console.error(`Backfill: error at page ${page}:`, error);
+      // Extract detailed error info including ERCOT response body for diagnosis
+      const errorDetails = extractErcotErrorDetails(error);
+      progress.error = errorDetails;
+      console.error(`Backfill: error at page ${page}: ${errorDetails}`);
       break;
     }
   }
