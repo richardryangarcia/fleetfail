@@ -14,6 +14,15 @@ export interface ArbModeState {
   armedAt: number | null;
 }
 
+export interface AutoFireStatus {
+  /** Whether auto-dispatch has fired for the current armed discharge window */
+  fired: boolean;
+  /** The hour (wall clock) at which auto-dispatch will fire */
+  scheduledHour: number | null;
+  /** Human-readable status message */
+  message: string;
+}
+
 interface MapSideStripProps {
   metrics: FleetMetrics;
   dispatch: Dispatch | null;
@@ -21,6 +30,7 @@ interface MapSideStripProps {
   priceData: PriceCacheData | null;
   isRunning: boolean;
   arbMode: ArbModeState | null;
+  autoFireStatus: AutoFireStatus | null;
   onStartDispatch: (targetKw: number) => void;
   onMassOutage?: (zoneId?: string) => void;
   onRestoreAll?: () => void;
@@ -55,6 +65,7 @@ export function MapSideStrip({
   priceData,
   isRunning,
   arbMode,
+  autoFireStatus,
   onStartDispatch,
   onMassOutage,
   onRestoreAll,
@@ -251,6 +262,31 @@ export function MapSideStrip({
             </span>
           )}
         </div>
+        
+        {/* Auto-dispatch status (client demo automation) */}
+        {arbMode?.armed && autoFireStatus && (
+          <div className={`mb-2 px-2 py-1.5 text-[10px] font-mono border ${
+            autoFireStatus.fired 
+              ? 'bg-[#0a1810] text-nc-ok border-[#1e4a32]' 
+              : 'bg-[#1a1408] text-nc-accent border-nc-accent-dim'
+          }`}>
+            {autoFireStatus.fired ? (
+              <span className="flex items-center gap-1.5">
+                <span className="text-nc-ok">✓</span>
+                auto-dispatch fired
+              </span>
+            ) : autoFireStatus.scheduledHour !== null ? (
+              <span>
+                auto-dispatch at {autoFireStatus.scheduledHour}:00
+                <span className="block text-[9px] text-nc-ink-mute mt-0.5">
+                  (client demo · resets on reload)
+                </span>
+              </span>
+            ) : (
+              <span className="text-nc-ink-mute">no discharge window</span>
+            )}
+          </div>
+        )}
         
         {priceData?.arbEdge?.hasEdge ? (
           <>

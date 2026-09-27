@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
-import { MapSideStrip, type ArbModeState } from '@/components/MapSideStrip';
+import { MapSideStrip, type ArbModeState, type AutoFireStatus } from '@/components/MapSideStrip';
 import { HourSlider } from '@/components/HourSlider';
+
+const AUTO_DISPATCH_TARGET_KW = 1500;
 
 const PRICE_REFRESH_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP TTL
 
@@ -41,6 +43,13 @@ export default function MapPage() {
   const lastStateFingerprintRef = useRef<string>('');
   const lastErcotFingerprintRef = useRef<string>('');
   const lastPriceFingerprintRef = useRef<string>('');
+  
+  // Auto-fire state: tracks which discharge window hours have been auto-fired (client-only, resets on reload)
+  const autoFiredWindowsRef = useRef<Set<number>>(new Set());
+  const [autoFireFired, setAutoFireFired] = useState(false);
+  
+  // Ref to hold the dispatch handler for use in effects (avoids stale closure)
+  const startDispatchRef = useRef<(targetKw: number) => Promise<void>>();
 
   const fetchState = useCallback(async () => {
     try {
@@ -137,6 +146,86 @@ export default function MapPage() {
     return () => clearInterval(interval);
   }, [fetchPrices]);
   
+  // Auto-dispatch effect: fires Start Dispatch when wall clock reaches armed discharge window
+  useEffect(() => {
+    const checkAutoFire = () => {
+      const arbMode = state?.arbMode;
+      const activeDispatch = state?.activeDispatch;
+      
+      // Conditions to skip auto-fire:
+      // 1. Not armed
+      if (!arbMode?.armed) return;
+      
+      // 2. No discharge window
+      const dischargeWindow = arbMode.dischargeWindow;
+      if (!dischargeWindow) return;
+      
+      // 3. Already fired for this window
+      const windowHour = dischargeWindow.hourEnding;
+      if (autoFiredWindowsRef.current.has(windowHour)) return;
+      
+      // 4. Dispatch already active (executing or converging)
+      if (activeDispatch?.status === 'executing') return;
+      
+      // Check if wall clock hour matches discharge window
+      // ERCOT hour-ending: hourEnding 17 = 16:00-17:00, so we fire when current hour >= hourEnding - 1
+      const now = new Date();
+      const currentHour = now.getHours();
+      
+      // Fire when we're in the discharge window hour
+      // hourEnding 17 means the hour 16:00-17:00, so fire when currentHour === 16
+      // Or for demo flexibility: fire when currentHour >= hourEnding - 1 && currentHour < hourEnding
+      const targetHour = windowHour - 1; // Convert hour-ending to hour-starting
+      
+      if (currentHour === targetHour || currentHour === windowHour) {
+        // Fire auto-dispatch
+        autoFiredWindowsRef.current.add(windowHour);
+        setAutoFireFired(true);
+        startDispatchRef.current?.(AUTO_DISPATCH_TARGET_KW);
+      }
+    };
+    
+    // Check immediately and then every second
+    checkAutoFire();
+    const interval = setInterval(checkAutoFire, 1000);
+    return () => clearInterval(interval);
+  }, [state?.arbMode, state?.activeDispatch]);
+  
+  // Reset auto-fire flag when arb mode is disarmed or when discharge window changes
+  useEffect(() => {
+    if (!state?.arbMode?.armed) {
+      setAutoFireFired(false);
+      // Note: We don't clear autoFiredWindowsRef here to prevent re-firing
+      // if user arms/disarms multiple times for same window
+    }
+  }, [state?.arbMode?.armed]);
+  
+  // Compute auto-fire status for UI
+  const autoFireStatus = useMemo((): AutoFireStatus | null => {
+    const arbMode = state?.arbMode;
+    if (!arbMode?.armed) return null;
+    
+    const dischargeWindow = arbMode.dischargeWindow;
+    if (!dischargeWindow) {
+      return {
+        fired: false,
+        scheduledHour: null,
+        message: 'no discharge window',
+      };
+    }
+    
+    const windowHour = dischargeWindow.hourEnding;
+    const hasFired = autoFiredWindowsRef.current.has(windowHour) || autoFireFired;
+    
+    return {
+      fired: hasFired,
+      scheduledHour: windowHour - 1, // Display as hour-starting for clarity
+      message: hasFired 
+        ? 'auto-dispatch fired' 
+        : `auto-dispatch at ${windowHour - 1}:00`,
+    };
+  }, [state?.arbMode, autoFireFired]);
+  
   const handleHourChange = useCallback((hourKey: string) => {
     setSelectedHourKey(hourKey);
   }, []);
@@ -158,6 +247,9 @@ export default function MapPage() {
     });
     await fetchState();
   };
+  
+  // Keep the ref updated so the auto-fire effect can use it
+  startDispatchRef.current = handleStartDispatch;
 
   const handleMassOutage = async (zoneId?: string) => {
     if (!state) return;
@@ -279,6 +371,7 @@ export default function MapPage() {
           priceData={priceData}
           isRunning={isRunning}
           arbMode={state.arbMode ?? null}
+          autoFireStatus={autoFireStatus}
           onStartDispatch={handleStartDispatch}
           onMassOutage={handleMassOutage}
           onRestoreAll={handleRestoreAll}

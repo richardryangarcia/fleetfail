@@ -6,6 +6,7 @@ import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, Gr
 import { HourSlider } from '@/components/HourSlider';
 
 const PRICE_REFRESH_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP TTL
+const AUTO_DISPATCH_TARGET_KW = 1500;
 
 interface ErcotData {
   zones: ErcotZone[];
@@ -48,6 +49,13 @@ export default function Home() {
   const lastStateFingerprintRef = useRef<string>('');
   const lastErcotCacheFingerprintRef = useRef<string>('');
   const lastPriceFingerprintRef = useRef<string>('');
+  
+  // Auto-fire state: tracks which discharge window hours have been auto-fired (client-only, resets on reload)
+  const autoFiredWindowsRef = useRef<Set<number>>(new Set());
+  const [autoFireFired, setAutoFireFired] = useState(false);
+  
+  // Ref to hold the dispatch handler for use in effects (avoids stale closure)
+  const startDispatchRef = useRef<() => Promise<void>>();
 
   const fetchState = useCallback(async () => {
     try {
@@ -167,6 +175,75 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [fetchPrices]);
   
+  // Auto-dispatch effect: fires Start Dispatch when wall clock reaches armed discharge window
+  useEffect(() => {
+    const checkAutoFire = () => {
+      const arbMode = state?.arbMode;
+      const activeDispatch = state?.activeDispatch;
+      
+      // Conditions to skip auto-fire:
+      // 1. Not armed
+      if (!arbMode?.armed) return;
+      
+      // 2. No discharge window
+      const dischargeWindow = arbMode.dischargeWindow;
+      if (!dischargeWindow) return;
+      
+      // 3. Already fired for this window
+      const windowHour = dischargeWindow.hourEnding;
+      if (autoFiredWindowsRef.current.has(windowHour)) return;
+      
+      // 4. Dispatch already active (executing or converging)
+      if (activeDispatch?.status === 'executing') return;
+      
+      // Check if wall clock hour matches discharge window
+      // ERCOT hour-ending: hourEnding 17 = 16:00-17:00, so we fire when current hour >= hourEnding - 1
+      const now = new Date();
+      const currentHour = now.getHours();
+      
+      // Fire when we're in the discharge window hour
+      // hourEnding 17 means the hour 16:00-17:00, so fire when currentHour === 16
+      // Or for demo flexibility: fire when currentHour === targetHour or windowHour
+      const targetHour = windowHour - 1; // Convert hour-ending to hour-starting
+      
+      if (currentHour === targetHour || currentHour === windowHour) {
+        // Fire auto-dispatch
+        autoFiredWindowsRef.current.add(windowHour);
+        setAutoFireFired(true);
+        startDispatchRef.current?.();
+      }
+    };
+    
+    // Check immediately and then every second
+    checkAutoFire();
+    const interval = setInterval(checkAutoFire, 1000);
+    return () => clearInterval(interval);
+  }, [state?.arbMode, state?.activeDispatch]);
+  
+  // Reset auto-fire flag when arb mode is disarmed
+  useEffect(() => {
+    if (!state?.arbMode?.armed) {
+      setAutoFireFired(false);
+    }
+  }, [state?.arbMode?.armed]);
+  
+  // Compute auto-fire status for UI (simple version for home page)
+  const autoFireStatus = useMemo(() => {
+    const arbMode = state?.arbMode;
+    if (!arbMode?.armed) return null;
+    
+    const dischargeWindow = arbMode.dischargeWindow;
+    if (!dischargeWindow) return null;
+    
+    const windowHour = dischargeWindow.hourEnding;
+    const hasFired = autoFiredWindowsRef.current.has(windowHour) || autoFireFired;
+    
+    return {
+      fired: hasFired,
+      scheduledHour: windowHour - 1,
+    };
+  }, [state?.arbMode, autoFireFired]);
+  
   const handleHourChange = useCallback((hourKey: string) => {
     setSelectedHourKey(hourKey);
   }, []);
@@ -184,6 +261,24 @@ export default function Home() {
       setLoading(false);
     }
   };
+  
+  // Auto-dispatch handler for the auto-fire effect (uses fixed target)
+  const handleAutoDispatch = async () => {
+    setLoading(true);
+    try {
+      await fetch('/api/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetKw: AUTO_DISPATCH_TARGET_KW, selectedHourKey }),
+      });
+      await fetchState();
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Keep the ref updated so the auto-fire effect can use it
+  startDispatchRef.current = handleAutoDispatch;
 
   const handleInjectFault = async (deviceId: string, faultType: string) => {
     await fetch('/api/fault', {
@@ -389,6 +484,28 @@ export default function Home() {
             >
               Start Dispatch
             </Button>
+            {/* Auto-dispatch status when armed (client demo automation) */}
+            {state?.arbMode?.armed && autoFireStatus && (
+              <div className={`mt-2 px-2 py-1.5 text-[10px] font-mono border ${
+                autoFireStatus.fired 
+                  ? 'bg-[#0a1810] text-nc-ok border-[#1e4a32]' 
+                  : 'bg-[#1a1408] text-nc-accent border-nc-accent-dim'
+              }`}>
+                {autoFireStatus.fired ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-nc-ok">✓</span>
+                    auto-dispatch fired
+                  </span>
+                ) : autoFireStatus.scheduledHour !== null ? (
+                  <span>
+                    auto-dispatch at {autoFireStatus.scheduledHour}:00
+                    <span className="block text-[9px] text-nc-ink-mute mt-0.5">
+                      (client demo · resets on reload)
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+            )}
           </VerbBlock>
 
           <Divider />
