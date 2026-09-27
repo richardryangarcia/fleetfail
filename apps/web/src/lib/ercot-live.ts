@@ -758,13 +758,28 @@ export async function fetchActualLoadByWeatherZone(): Promise<ActualLoadByZone[]
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 4);
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = now.toISOString().split('T')[0];
+  
   const response = await client.get<ErcotApiResponse<ActualLoadByZone>>('/np6-345-cd/act_sys_load_by_wzn', {
     params: {
       size: 96,
+      deliveryDateFrom,
+      deliveryDateTo,
     },
   });
   
   const data = transformErcotResponse<ActualLoadByZone>(response.data);
+  
+  if (data.length === 0) {
+    console.warn(`ERCOT actual load returned 0 rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  } else {
+    console.log(`ERCOT actual load returned ${data.length} rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  }
+  
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -772,13 +787,28 @@ export async function fetchLoadForecastByWeatherZone(): Promise<LoadForecastByZo
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 3);
+  const deliveryDateFrom = now.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
   const response = await client.get<ErcotApiResponse<LoadForecastByZone>>('/np3-565-cd/lf_by_model_weather_zone', {
     params: {
       size: 72,
+      deliveryDateFrom,
+      deliveryDateTo,
     },
   });
   
   const data = transformErcotResponse<LoadForecastByZone>(response.data);
+  
+  if (data.length === 0) {
+    console.warn(`ERCOT load forecast returned 0 rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  } else {
+    console.log(`ERCOT load forecast returned ${data.length} rows for date range ${deliveryDateFrom} to ${deliveryDateTo}`);
+  }
+  
   return sortByDeliveryDateHourDesc(data);
 }
 
@@ -786,9 +816,19 @@ export async function fetchWindActualAndForecast(): Promise<WindActualForecast[]
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 4);
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 3);
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
   const response = await client.get<ErcotApiResponse<WindActualForecast>>('/np4-742-cd/wpp_hrly_actual_fcast_geo', {
     params: {
       size: 300,
+      deliveryDateFrom,
+      deliveryDateTo,
     },
   });
   
@@ -800,6 +840,14 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
   const token = await getAccessToken();
   const client = createApiClient(token);
   
+  const now = new Date();
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 4);
+  const toDate = new Date(now);
+  toDate.setDate(toDate.getDate() + 3);
+  const deliveryDateFrom = fromDate.toISOString().split('T')[0];
+  const deliveryDateTo = toDate.toISOString().split('T')[0];
+  
   const paths = [
     '/np4-745-cd/spp_hrly_actual_fcast_geo',
     '/np4-745-cd/spp_hrly_actual_fcast_ge',
@@ -810,6 +858,8 @@ export async function fetchSolarActualAndForecast(): Promise<SolarActualForecast
       const response = await client.get<ErcotApiResponse<SolarActualForecast>>(path, {
         params: {
           size: 300,
+          deliveryDateFrom,
+          deliveryDateTo,
         },
       });
       
@@ -1074,8 +1124,14 @@ function buildErcotCacheData(
   windData: WindActualForecast[],
   solarData: SolarActualForecast[]
 ): ErcotCacheData {
+  console.log(`buildErcotCacheData: actualLoad=${actualLoad.length}, loadForecast=${loadForecast.length}, wind=${windData.length}, solar=${solarData.length}`);
+  
   if (!actualLoad.length && !loadForecast.length) {
     throw new Error('No load data available from ERCOT API');
+  }
+  
+  if (!actualLoad.length && loadForecast.length > 0) {
+    console.warn('WARNING: No actual load data available - hourlyData will be forecast-only');
   }
   
   const windByHourZone = new Map<string, Map<string, number>>();
@@ -1149,6 +1205,16 @@ function buildErcotCacheData(
   }
   
   hourlySnapshots.sort((a, b) => a.hourKey.localeCompare(b.hourKey));
+  
+  const actualSnapshots = hourlySnapshots.filter(h => h.dataType === 'actual');
+  const forecastSnapshots = hourlySnapshots.filter(h => h.dataType === 'forecast');
+  const uniqueDates = [...new Set(hourlySnapshots.map(h => h.deliveryDate))].sort();
+  
+  console.log(`buildErcotCacheData: built ${hourlySnapshots.length} total snapshots (${actualSnapshots.length} actual, ${forecastSnapshots.length} forecast) spanning ${uniqueDates.length} dates: ${uniqueDates.join(', ')}`);
+  
+  if (actualSnapshots.length === 0 && hourlySnapshots.length > 0) {
+    console.warn('CRITICAL: Zero actual hours in hourlyData - slider will show forecast-only data');
+  }
   
   const captureTime = new Date();
   const currentHour = captureTime.getHours();
