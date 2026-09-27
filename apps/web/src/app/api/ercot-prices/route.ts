@@ -21,7 +21,7 @@ import { fetchLiveErcotPrices, hasErcotCredentials } from '@/lib/ercot-live';
 export const dynamic = 'force-dynamic';
 
 let cachedPriceData: { data: PriceCacheData; fetchedAt: number } | null = null;
-const CACHE_TTL_MS = 60 * 1000; // 1 minute for prices (more volatile than load)
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP (ercot-live RT_SPP_TTL_MS)
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -46,11 +46,21 @@ export async function GET(request: Request) {
       return NextResponse.json(liveData);
     } catch (error) {
       console.error('Failed to fetch live ERCOT price data:', error);
-      // Fall through to unavailable state
+      
+      // On failure, return last-good cached data (even if stale) with 'cached' label
+      // This prevents LIVE ↔ Unavailable flicker on transient failures / 429s
+      if (cachedPriceData && cachedPriceData.data.settlementPoint === settlementPoint) {
+        const staleButGood: PriceCacheData = {
+          ...cachedPriceData.data,
+          dataSource: 'cached',
+        };
+        return NextResponse.json(staleButGood);
+      }
+      // Fall through to unavailable only if never had real prices
     }
   }
   
-  // No credentials or fetch failed - return unavailable state
+  // No credentials AND never had real prices - return unavailable state
   // Per PRD: "prefer empty/unavailable for prices if no real sample was captured"
   // NEVER invent SPP numbers
   const unavailable = createUnavailablePriceCache(settlementPoint);

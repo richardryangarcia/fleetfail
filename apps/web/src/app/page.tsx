@@ -5,6 +5,8 @@ import Link from 'next/link';
 import type { Device, FleetMetrics, FleetEvent, Dispatch, Command, ErcotZone, GridStatus, ZoneAllocation, ErcotCacheData, PriceCacheData } from '@fleetfail/engine';
 import { HourSlider } from '@/components/HourSlider';
 
+const PRICE_REFRESH_MS = 15 * 60 * 1000; // 15 minutes - aligned with RT SPP TTL
+
 interface ErcotData {
   zones: ErcotZone[];
   zoneAllocations: ZoneAllocation[];
@@ -42,27 +44,53 @@ export default function Home() {
   
   const selectedHourKeyRef = useRef<string | null>(null);
   selectedHourKeyRef.current = selectedHourKey;
+  
+  const lastStateFingerprintRef = useRef<string>('');
+  const lastErcotCacheFingerprintRef = useRef<string>('');
+  const lastPriceFingerprintRef = useRef<string>('');
 
   const fetchState = useCallback(async () => {
     try {
       const currentHourKey = selectedHourKeyRef.current;
       const hourParam = currentHourKey ? `?hourKey=${encodeURIComponent(currentHourKey)}` : '';
-      const [stateRes, ercotRes, cachedErcotRes, priceRes] = await Promise.all([
+      const [stateRes, cachedErcotRes] = await Promise.all([
         fetch('/api/state'),
-        fetch('/api/ercot'),
         fetch(`/api/ercot-cache${hourParam}`),
-        fetch('/api/ercot-prices'),
       ]);
-      const [stateData, ercotDataRes, cachedErcotDataRes, priceDataRes] = await Promise.all([
+      const [stateData, cachedErcotDataRes] = await Promise.all([
         stateRes.json(),
-        ercotRes.json(),
         cachedErcotRes.json(),
-        priceRes.json(),
       ]);
-      setState(stateData);
-      setErcotData(ercotDataRes);
-      setCachedErcotData(cachedErcotDataRes);
-      setPriceData(priceDataRes);
+      
+      const stateFingerprint = JSON.stringify({
+        deliveredKw: stateData.metrics?.deliveredKw,
+        pendingCommands: stateData.metrics?.pendingCommands,
+        devicesOnline: stateData.metrics?.devicesOnline,
+        devicesOffline: stateData.metrics?.devicesOffline,
+        dispatchTargetKw: stateData.metrics?.dispatchTargetKw,
+        isRunning: stateData.isRunning,
+        dispatchStatus: stateData.activeDispatch?.status,
+        dispatchId: stateData.activeDispatch?.id,
+        eventsLen: stateData.events?.length,
+        lastEventId: stateData.events?.[stateData.events.length - 1]?.id,
+        arbArmed: stateData.arbMode?.armed,
+      });
+      if (stateFingerprint !== lastStateFingerprintRef.current) {
+        lastStateFingerprintRef.current = stateFingerprint;
+        setState(stateData);
+      }
+      
+      const ercotFingerprint = JSON.stringify({
+        dataSource: cachedErcotDataRes.dataSource,
+        currentHourKey: cachedErcotDataRes.currentHourKey,
+        totalLoadMw: cachedErcotDataRes.gridSummary?.totalLoadMw,
+        frequencyHz: cachedErcotDataRes.gridSummary?.frequencyHz,
+        hourlyDataLen: cachedErcotDataRes.hourlyData?.length,
+      });
+      if (ercotFingerprint !== lastErcotCacheFingerprintRef.current) {
+        lastErcotCacheFingerprintRef.current = ercotFingerprint;
+        setCachedErcotData(cachedErcotDataRes);
+      }
       
       if (!selectedHourKeyRef.current && cachedErcotDataRes.currentHourKey) {
         setSelectedHourKey(cachedErcotDataRes.currentHourKey);
@@ -71,12 +99,79 @@ export default function Home() {
       console.error('Failed to fetch state:', error);
     }
   }, []);
+  
+  const lastErcotFingerprintRef = useRef<string>('');
+  
+  const fetchErcotData = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ercot');
+      const data = await res.json();
+      const fingerprint = JSON.stringify({
+        totalLoadMw: data.gridStatus?.totalLoadMw,
+        zonesLen: data.zones?.length,
+      });
+      if (fingerprint !== lastErcotFingerprintRef.current) {
+        lastErcotFingerprintRef.current = fingerprint;
+        setErcotData(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch ERCOT data:', error);
+    }
+  }, []);
+  
+  const fetchPrices = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ercot-prices');
+      const data: PriceCacheData = await res.json();
+      
+      const fingerprint = JSON.stringify({
+        currentPriceMwh: data.currentPriceMwh,
+        settlementPoint: data.settlementPoint,
+        dataSource: data.dataSource,
+        chargeWindow: data.arbEdge?.chargeWindow,
+        dischargeWindow: data.arbEdge?.dischargeWindow,
+      });
+      
+      if (fingerprint !== lastPriceFingerprintRef.current) {
+        // Don't overwrite good LIVE/Cached data with Unavailable
+        // Sticky last-good: keep previous prices on transient failures
+        const isUnavailable = data.currentPriceMwh === null;
+        const hadGoodData = lastPriceFingerprintRef.current !== '' && 
+          !lastPriceFingerprintRef.current.includes('"currentPriceMwh":null');
+        
+        if (isUnavailable && hadGoodData) {
+          return;
+        }
+        
+        lastPriceFingerprintRef.current = fingerprint;
+        setPriceData(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch price data:', error);
+    }
+  }, []);
 
   useEffect(() => {
     fetchState();
     const interval = setInterval(fetchState, 500);
     return () => clearInterval(interval);
   }, [fetchState]);
+  
+  useEffect(() => {
+    fetchErcotData();
+  }, [fetchErcotData]);
+  
+  useEffect(() => {
+    fetchPrices();
+    const interval = setInterval(fetchPrices, PRICE_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [fetchPrices]);
+  
+  useEffect(() => {
+    if (selectedHourKey) {
+      fetchPrices();
+    }
+  }, [selectedHourKey, fetchPrices]);
   
   const handleHourChange = useCallback((hourKey: string) => {
     setSelectedHourKey(hourKey);
